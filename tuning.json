@@ -1,0 +1,85 @@
+{
+  "$schema": "./tuning.schema.json",
+  "time": {
+    "ticksPerYear": 252,
+    "defaultCareerYears": 30,
+    "maxSimYears": 50,
+    "tickIntervalMsAt1x": 1000
+  },
+  "multiplayer": {
+    "maxPlayersPerSession": 8,
+    "speedPolicy": {
+      "soloPlayerControlsSpeed": true,
+      "multiplayerLockedTo1x": true,
+      "allowedSpeedsSolo": [0, 1, 4, 16, 64]
+    },
+    "snapshotEveryTicks": 252,
+    "orderQueueDeterministicTiebreak": "playerIdAscending"
+  },
+  "leaderboard": {
+    "publicByDefault": true,
+    "fields": ["playerId", "displayName", "totalAum", "returnPct", "rank"]
+  },
+  "feedback": {
+    "playerWealthEffect": {
+      "enabledFromDay1": true,
+      "aumShareToFlowGain": 0.5,
+      "flowContributionCap": 0.05,
+      "priceImpactBpsPerAdvPct": 8,
+      "priceImpactCapBps": 150
+    }
+  },
+  "stability": {
+    "dailyMoveCapPct": 25,
+    "eventDayDailyMoveCapPct": 60,
+    "sectorTickShockBudgetPct": 15,
+    "marketTickShockBudgetPct": 8
+  },
+  "breakthroughs": {
+    "perCompanyAnnualProbability": 0.02,
+    "severityDistribution": { "type": "truncatedPareto", "alpha": 1.5, "min": 0.1, "max": 1.0 },
+    "decay": { "defaultHalfLifeTicks": 60 },
+    "adminInjectEnabled": true,
+    "seededRandomEnabled": true,
+    "archetypes": [
+      { "id": "BreakthroughInvention",      "direction":  1, "minPct":  20, "maxPct":  60, "rippleCompetitorsPct":  -10, "rippleSuppliersPct":   5 },
+      { "id": "EfficiencyGain",             "direction":  1, "minPct":  10, "maxPct":  30, "rippleCompetitorsPct":   -5, "rippleSuppliersPct":  -3 },
+      { "id": "BlockbusterLaunch",          "direction":  1, "minPct":  15, "maxPct":  40, "rippleCompetitorsPct":   -8, "rippleSuppliersPct":   3 },
+      { "id": "RegulatoryApproval",         "direction":  1, "minPct":  10, "maxPct":  25, "rippleCompetitorsPct":   -3, "rippleSuppliersPct":   0 },
+      { "id": "DisruptiveEntrant",          "direction":  1, "minPct":  30, "maxPct":  80, "rippleCompetitorsPct":  -15, "rippleSuppliersPct":   0 },
+      { "id": "FraudScandal",               "direction": -1, "minPct":  30, "maxPct":  70, "rippleCompetitorsPct":   -3, "rippleSuppliersPct":  -2 },
+      { "id": "ProductRecall",              "direction": -1, "minPct":  15, "maxPct":  40, "rippleCompetitorsPct":    5, "rippleSuppliersPct":  -5 },
+      { "id": "KeyPersonLoss",              "direction": -1, "minPct":   5, "maxPct":  20, "rippleCompetitorsPct":    1, "rippleSuppliersPct":   0 },
+      { "id": "AntitrustRuling",            "direction": -1, "minPct":  10, "maxPct":  30, "rippleCompetitorsPct":   -3, "rippleSuppliersPct":   0 },
+      { "id": "ActivistTakeover",           "direction":  1, "minPct":  10, "maxPct":  25, "rippleCompetitorsPct":    2, "rippleSuppliersPct":   0 }
+    ]
+  },
+  "visibility": {
+    "roles": {
+      "Admin": {
+        "macro.gdpGrowth": true, "macro.inflation": true, "macro.policyRate": true,
+        "macro.creditSpread": true, "macro.consumerSentiment": true, "macro.cyclePhase": true,
+        "sector.earningsGrowth": true, "sector.rotationFactor": true, "sector.pe": true,
+        "company.price": true, "company.volume": true, "company.ttmEarnings": true,
+        "company.fairValue": true, "company.qualityScore": true,
+        "company.floatHeldByPlayer": true, "company.playerImpactDecay": true,
+        "player.ownPositions": true, "player.otherPositions": true,
+        "leaderboard.basic": true, "leaderboard.detailed": true,
+        "events.publicFeed": true, "events.internalRecord": true,
+        "session.tickInternals": true, "session.rngCursor": true
+      },
+      "Standard": {
+        "macro.gdpGrowth": true, "macro.inflation": true, "macro.policyRate": true,
+        "macro.creditSpread": false, "macro.consumerSentiment": true, "macro.cyclePhase": false,
+        "sector.earningsGrowth": true, "sector.rotationFactor": false, "sector.pe": true,
+        "company.price": true, "company.volume": true, "company.ttmEarnings": true,
+        "company.fairValue": false, "company.qualityScore": false,
+        "company.floatHeldByPlayer": false, "company.playerImpactDecay": false,
+        "player.ownPositions": true, "player.otherPositions": false,
+        "leaderboard.basic": true, "leaderboard.detailed": false,
+        "events.publicFeed": true, "events.internalRecord": false,
+        "session.tickInternals": false, "session.rngCursor": false
+      }
+    }
+  }
+}
