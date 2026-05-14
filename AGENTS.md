@@ -5,52 +5,58 @@ this repository. They capture decisions the project owner has made and that
 must not be silently revisited. If a constraint here ever conflicts with a
 short-term instruction, **stop and ask** rather than dropping the constraint.
 
+> **Repo state:** the codebase has been deliberately reset. Only this file,
+> [`README.md`](./README.md), [`tuning.json`](./tuning.json),
+> [`.github/copilot-instructions.md`](./.github/copilot-instructions.md),
+> and `.gitignore` are kept. There is **no** application code yet — neither
+> the previous TypeScript prototype nor the partial C# port survive. The
+> next coding session starts from a clean slate, idiomatic C# from line one.
+
 ---
 
 ## 1. Language & runtime
 
-- **The core simulation engine MUST be written in C#** (.NET, latest LTS).
-  All deterministic, server-authoritative game logic — tuning loader,
-  PRNG, session/tick loop, macro engine, fundamentals, pricing kernel,
-  order matching, breakthrough engine, snapshots — belongs in the C#
-  engine.
-- The current TypeScript code under `src/` and `tests/` is an early
-  **prototype/spike** that pre-dates this decision. It is kept for
-  reference only and will be replaced by the C# implementation. Do not
-  add new features to the TypeScript code; port instead.
-- Front-end / UI may be a separate language (TypeScript, etc.) talking to
-  the C# engine over a defined boundary. That boundary is not yet
-  designed.
-- Acceptable layout for the C# engine when it lands (suggested, not
-  binding):
+- **The entire engine is C#.** Target the latest .NET LTS SDK (.NET 8 today;
+  upgrade in lock-step when a new LTS ships). There is no TypeScript,
+  JavaScript, or Node tooling in the engine. Do not reintroduce any.
+- Front-end / UI may eventually be a separate process in another language
+  talking to the C# engine over a defined boundary. That boundary is not
+  yet designed; do not pre-empt it.
+- Suggested layout (binding once code lands):
 
-  ```
+  ```text
   engine/
+    Wsr2.sln
     src/
-      Wsr2.Engine/             # class library: tuning, rng, session, macro, ...
+      Wsr2.Engine/             # class library: tuning, rng, session, macro, …
       Wsr2.Engine.Cli/         # optional headless runner / golden sim
     tests/
       Wsr2.Engine.Tests/       # xUnit
-    Wsr2.sln
-  tuning.json                  # stays at repo root, shared across hosts
+  tuning.json                   # stays at repo root, shared across hosts
   ```
 
 ## 2. Determinism (non-negotiable)
 
 - All randomness MUST flow through a single seeded PRNG owned by the
-  session. The reference implementation is xoroshiro128**; keep that
-  choice unless there is a strong reason to change.
-- Snapshots MUST be **bit-exact**. A session restored from a snapshot,
-  then advanced N ticks, must produce a snapshot identical to advancing
-  the original session N ticks.
-- No use of wall-clock time, `Random.Shared`, hash-of-pointer, or any
-  other ambient nondeterminism inside engine code.
-- Order IDs and sequence numbers are **server-assigned**. Never trust
-  client-supplied IDs/sequences — that is a multiplayer fairness exploit
+  session. The reference algorithm is **xoroshiro128\*\***.
+- Snapshots MUST be **bit-exact**. Restoring from a snapshot, then
+  advancing N ticks, must produce a snapshot byte-for-byte identical to
+  advancing the original session N ticks.
+- No `Random`, no `Random.Shared`, no `DateTime.Now`/`UtcNow`,
+  no `Stopwatch`, no `Guid.NewGuid()`, no `Environment.TickCount`, no
+  `RuntimeHelpers.GetHashCode`, no PID, no thread id — nothing ambient
+  inside engine code. If you need a clock for telemetry, inject an
+  `IClock` and keep it out of the deterministic core.
+- Iteration order over hash-based collections (`Dictionary<,>`,
+  `HashSet<>`) must not affect state. When the order matters, sort by a
+  stable key (`OrderBy(x => x.Id, StringComparer.Ordinal)`) before
+  using the result.
+- **Order IDs and sequence numbers are server-assigned.** Never trust
+  client-supplied IDs/sequences — that's a multiplayer fairness exploit
   vector.
-- Iteration over hash-based collections must be replaced with
-  deterministic ordering (e.g. sorted by key) before the result feeds
-  into anything that affects state.
+- Floating-point: prefer `double`; do not change rounding modes; avoid
+  `Math.Fma` / SIMD intrinsics in the deterministic core unless you've
+  proven cross-platform stability with tests.
 
 ## 3. Tunability (non-negotiable)
 
@@ -61,8 +67,10 @@ short-term instruction, **stop and ask** rather than dropping the constraint.
 - Engine code must never hard-code a number a designer might want to
   tweak. If you find yourself typing a magic constant, it belongs in
   `tuning.json`.
-- The tuning loader must fail fast with a clear error if a required
-  field is missing, out of range, or the wrong type.
+- The tuning loader fails fast with a clear, actionable error if a
+  required field is missing, out of range, or the wrong type. Throw a
+  dedicated `TuningException` (or similar named exception); never throw
+  bare `Exception` or swallow `JsonException`.
 
 ## 4. Server-authoritative architecture
 
@@ -96,22 +104,126 @@ short-term instruction, **stop and ask** rather than dropping the constraint.
 
 ## 7. Snapshots & migration
 
-- `SessionSnapshot` carries a `schemaVersion`. Bumping the engine schema
+- `SessionSnapshot` carries a `SchemaVersion`. Bumping the engine schema
   REQUIRES a migration path from the previous version (re-derive missing
   fields from `tuning.*.initial` or equivalent; never silently drop
   data).
 - Restoring an unknown schema version must throw, not guess.
+- Snapshots serialize via `System.Text.Json` with explicit, versioned
+  contracts (records + `JsonSerializerOptions` with stable property
+  naming). No `BinaryFormatter`. No reflection-based shortcuts that
+  change between runtimes.
 
-## 8. Phased build
+## 8. C# best practices (binding for this repo)
+
+These are the project-wide style and quality rules. They are not
+suggestions; they're the bar that PRs are reviewed against.
+
+### Project & build
+- One `Directory.Build.props` at `engine/` sets common properties for
+  every project: `<TargetFramework>net8.0</TargetFramework>`,
+  `<LangVersion>latest</LangVersion>`, `<Nullable>enable</Nullable>`,
+  `<ImplicitUsings>enable</ImplicitUsings>`,
+  `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`,
+  `<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>`,
+  `<AnalysisLevel>latest-recommended</AnalysisLevel>`.
+- One `.editorconfig` at the repo root encodes formatting (4-space
+  indent, LF line endings, file-scoped namespaces, `var` only when the
+  type is apparent on the right-hand side, expression-bodied members
+  where they improve clarity).
+- Solution file: `engine/Wsr2.sln`. One project per concern; library
+  projects do not depend on test projects.
+- No `unsafe` blocks in the engine without an explicit, reviewed reason.
+
+### Language style
+- **Nullable reference types are on everywhere.** Eliminate warnings;
+  do not paper over with `!`. If a value is nullable, it is `T?` and
+  consumers handle it.
+- **Immutable by default.** Prefer `record` / `readonly record struct`
+  for data; `IReadOnlyList<T>`, `ImmutableArray<T>`,
+  `ImmutableDictionary<TK, TV>` for collections that cross API
+  boundaries.
+- **File-scoped namespaces.** One top-level type per file, file name
+  matches the type.
+- Use `sealed` on classes that don't need to be subclassed (the
+  default for engine internals).
+- Pattern matching, `switch` expressions, target-typed `new()`,
+  collection expressions (`[1, 2, 3]`) are preferred over older idioms
+  when they read more clearly.
+- `using` declarations over `try/finally` for `IDisposable`.
+- `ConfigureAwait(false)` on every awaited task in library code.
+- Cancellation: every long-running async API takes `CancellationToken`,
+  named `cancellationToken`, defaulted only at the public boundary.
+
+### Naming
+- Types, methods, properties, public fields: `PascalCase`.
+- Locals, parameters: `camelCase`.
+- Private fields: `_camelCase`.
+- Constants and enum members: `PascalCase` (no `SCREAMING_SNAKE`).
+- Interfaces start with `I` (`ITuningSource`, `IClock`).
+- Async methods that return a `Task`/`ValueTask` end in `Async`.
+
+### Errors
+- Throw the most specific BCL exception that fits, or a project-defined
+  exception derived from `Exception`. Never throw `Exception` directly.
+- Validate arguments at the top of public methods using
+  `ArgumentNullException.ThrowIfNull(...)`,
+  `ArgumentOutOfRangeException.ThrowIfNegativeOrZero(...)`, etc.
+- Don't swallow exceptions. If a `catch` is needed, it logs at the
+  right level and either rethrows or transforms into a domain
+  exception.
+
+### LINQ & collections
+- LINQ is fine for clarity; do not chain it inside per-tick hot paths
+  without measuring. The pricing kernel and matching engine are hot
+  paths — write loops there.
+- Prefer `IReadOnlyCollection<T>` / `IReadOnlyList<T>` over `IEnumerable<T>`
+  on public APIs that callers will iterate more than once.
+
+### Async
+- The deterministic engine core is **synchronous**. Async lives at the
+  edges: I/O (snapshot persistence, network) and orchestration. Do not
+  smear `async`/`await` through `Tick()` and friends.
+
+### Logging
+- Use `Microsoft.Extensions.Logging` abstractions; do **not**
+  `Console.WriteLine` from the engine. Tests may use the xUnit
+  `ITestOutputHelper`.
+- Log messages use compile-time templates (`logger.LogInformation("seed
+  {Seed}", seed);`), not interpolation.
+
+### Tests
+- xUnit for everything. One test class per production type, mirroring
+  the namespace; file name `<Type>Tests.cs`.
+- `FluentAssertions` is allowed but not required; pick one style per
+  test class and stick with it.
+- Tests are arrange / act / assert, with one logical assertion group
+  per test. Names read as sentences:
+  `Tick_WhenMultiplePlayersJoined_LocksSpeedToOne`.
+- Determinism tests: every RNG-consuming subsystem ships at least one
+  test that asserts a known sequence of outputs for a fixed seed.
+  Snapshot tests: round-trip + advance-N-ticks equality.
+- Tests must not touch the network, real wall clock, or filesystem
+  outside the test project's own output directory.
+
+### Tooling
+- `dotnet format` is the formatter of record. CI (when added) runs
+  `dotnet format --verify-no-changes` and `dotnet build
+  /warnaserror`.
+- No third-party dependencies in the engine library beyond the BCL,
+  `System.Text.Json`, and `Microsoft.Extensions.Logging.Abstractions`
+  without explicit approval. Test-only dependencies (xUnit,
+  FluentAssertions, etc.) are unrestricted.
+
+## 9. Phased build
 
 The agreed build order is:
 
-1. **Phase 0 — Foundations** ✅ (in TS prototype): tuning, RNG,
-   visibility, session/tick loop, snapshots, admin gate.
-   **C# port in progress** (`engine/`): RNG ✅, tuning loader ✅;
-   visibility / session / snapshots 🔜.
-2. **Phase 1 — Simulation engine** 🚧: macro environment ✅ (TS proto);
-   company fundamentals 🔜; pricing kernel 🔜.
+1. **Phase 0 — Foundations** 🔜: tuning loader, deterministic PRNG,
+   role-based visibility, server-authoritative session/tick loop,
+   snapshot/restore, admin-action gate.
+2. **Phase 1 — Simulation engine** 🔜: macro environment, company
+   fundamentals, pricing kernel.
 3. **Phase 2** — instruments, order matching.
 4. **Phase 3** — breakthrough events (data-driven from
    `tuning.breakthroughs.archetypes`).
@@ -121,7 +233,7 @@ The agreed build order is:
 Within Phase 1, fundamentals must land before the pricing kernel, since
 the kernel reads fundamentals + macro.
 
-## 9. Decisions baked in
+## 10. Decisions baked in
 
 (These are concrete settings, mostly mirrored in `tuning.json`. Listed
 here so they aren't accidentally reverted.)
@@ -137,12 +249,13 @@ here so they aren't accidentally reverted.)
 - Breakthrough events are data, not code. Both seeded-random generation
   and admin injection are intended to be supported.
 
-## 10. Process rules for agents
+## 11. Process rules for agents
 
 - Make **small, surgical changes**; one PR ≈ one slice from the phased
   plan.
-- Run lint/build/tests before declaring a slice done. Add tests for any
-  new engine behaviour, especially determinism and snapshot round-trip.
+- Run `dotnet build` and `dotnet test` before declaring a slice done.
+  Add tests for any new engine behaviour, especially determinism and
+  snapshot round-trip.
 - Do not delete or weaken determinism, visibility, or tunability tests.
 - If the user says **"continue"**, continue from the next pending item
   in the most recent PR's checklist.

@@ -1,11 +1,23 @@
-node_modules/
-dist/
-coverage/
-*.log
-.DS_Store
-.env
-.env.local
-
-# .NET build artifacts
+## .NET build artifacts
 **/bin/
 **/obj/
+*.user
+*.suo
+.vs/
+
+## Test / coverage output
+TestResults/
+**/coverage*.xml
+**/coverage*.json
+**/*.coverage
+
+## Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+## Local secrets
+*.env
+*.env.local

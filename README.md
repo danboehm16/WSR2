@@ -2,82 +2,95 @@
 
 A multiplayer-ready stock-market simulation game.
 
-> **Heads-up for contributors:** the **core simulation engine is being built
-> in C#** (.NET). The TypeScript code currently in `src/` is an earlier
-> prototype that pre-dates that decision; it works and the tests pass, but
-> it is being ported, not extended. The C# scaffold lives in
-> [`engine/`](./engine/) — see [`engine/README.md`](./engine/README.md) for
-> porting status and [`AGENTS.md`](./AGENTS.md) for the full set of standing
-> constraints (determinism, tunability, server-authoritative architecture,
-> role-based visibility, multiplayer speed policy, phased build, …).
+> **Repo state — clean slate.** The earlier TypeScript prototype and the
+> partial C# port have been removed. This repository currently contains
+> only the design constants ([`tuning.json`](./tuning.json)) and the
+> standing rules for contributors ([`AGENTS.md`](./AGENTS.md)). The next
+> coding session will build the engine fresh, in idiomatic C#, from line
+> one.
 
-This repository is being built up in phases.
+## Language & toolchain
 
-- **Phase 0 — Foundations** ✅ (architectural spine: tuning, RNG, visibility, session/tick loop, snapshots) — *prototyped in TS, to be ported to C#*
-- **Phase 1 — Simulation engine** 🚧 (macro environment ✅ in TS prototype, company fundamentals 🔜, pricing kernel 🔜)
-- **Phase 2+** — instruments, breakthrough events, networking, UI
+- **C# / .NET 8 LTS** for the engine (and any subsequent server).
+- xUnit for tests.
+- `dotnet format` for formatting; warnings treated as errors.
+- No Node, npm, or TypeScript anywhere in the engine tree.
 
-There is no instrument trading, pricing kernel or UI yet. Phase 0 deliberately
-shipped only the spine (determinism, role-based visibility, multiplayer
-session/tick loop, tunability) so nothing has to be retrofitted later. Phase 1
-is now layering the simulation in on top of those hooks.
+See [`AGENTS.md`](./AGENTS.md) §8 ("C# best practices") for the full set
+of binding style and quality rules.
 
-## What's in the codebase today (TS prototype)
+## Planned layout
 
-| Concern | Where | Notes |
-|---|---|---|
-| All design constants | `tuning.json` | Loaded & validated at startup. **Nothing in code hard-codes a tunable.** |
-| Tuning loader | `src/tuning.ts` | Fail-fast schema validation. |
-| Deterministic PRNG | `src/rng.ts` | xoroshiro128** with snapshot/restore — required for replay & MP determinism. |
-| Role-based visibility | `src/visibility.ts` | Server-side filter. Deny-by-default for unknown fields/roles. |
-| Session + tick loop | `src/session.ts` | Server-authoritative. Deterministic order queue. Snapshot/restore (schema v2). |
-| Macro environment | `src/macro.ts` | 4-phase business cycle + OU drift on GDP / inflation / policy rate / credit spread / consumer sentiment. Driven from session RNG. |
+When code lands, it will look like this:
 
-### Decisions baked in
+```text
+engine/
+  Wsr2.sln
+  Directory.Build.props        # net8.0, nullable on, warnings-as-errors
+  src/
+    Wsr2.Engine/               # class library: tuning, rng, session, macro, …
+    Wsr2.Engine.Cli/           # optional headless runner / golden sim
+  tests/
+    Wsr2.Engine.Tests/         # xUnit
+.editorconfig
+tuning.json                    # all design constants — already present
+```
 
-1. **30-year default career.** `time.defaultCareerYears = 30`, `ticksPerYear = 252`. Stability is a guarantee for at least 30 years of simulated time; `maxSimYears = 50` gives headroom.
-2. **Role-based visibility.** Two built-in roles, `Admin` and `Standard`. Per-field map in `tuning.json` controls what each role sees. Filtering happens server-side at the serialization boundary so privileged data never leaves the server.
-3. **Everything tunable.** Magnitudes, probabilities, caps, the visibility map itself, breakthrough archetypes — all in `tuning.json`.
-4. **Player feedback enabled from day 1.** `feedback.playerWealthEffect.enabledFromDay1 = true`. Effect strength scales with AUM share of total market cap.
-5. **Multiplayer-ready from day 1.** `Session` supports 1..N players with deterministic, server-stamped order queueing and bit-exact snapshots.
-6. **Speed policy.** Solo player can choose any speed in `allowedSpeedsSolo`. As soon as a second player joins, speed is locked to 1×. Admins can override the lock for narrative use.
-7. **Public leaderboard by default** (`leaderboard.publicByDefault = true`).
-8. **Breakthrough events.** Defined as data in `tuning.json` (`breakthroughs.archetypes`). Both seeded-random generation and admin injection are enabled. Engine wiring lands in a later phase.
-
-## Install & run
+## Build & test (once code lands)
 
 ```bash
-npm install
-npm run lint    # type-check only (no emit)
-npm test        # runs the vitest suite
-npm run build   # emits dist/
+cd engine
+dotnet restore
+dotnet build                        # warnings are errors
+dotnet test                         # xUnit
+dotnet format --verify-no-changes   # style gate
 ```
 
-## Repository layout
+## Standing constraints (one-line summary — see AGENTS.md for the rest)
 
-```
-src/
-  tuning.ts       # config loader + types
-  rng.ts          # deterministic seeded PRNG
-  visibility.ts   # role-based field filter
-  macro.ts        # macro environment: cycle phases + OU drift
-  session.ts      # server-authoritative session, tick loop, snapshots
-  index.ts        # public re-exports
-tests/
-  *.test.ts       # vitest suites
-tuning.json       # all design constants
-```
+| Topic | Rule |
+|---|---|
+| Language | C# / .NET 8 LTS only in the engine. |
+| Determinism | Single seeded xoroshiro128\*\* PRNG; snapshots bit-exact; no ambient nondeterminism (`Random.Shared`, `DateTime.Now`, `Guid.NewGuid()`, hash-set iteration order, …). |
+| Tunability | Every design constant lives in `tuning.json`; the loader fails fast on missing/invalid fields. |
+| Server-authoritative | Engine validates and sequences all client actions; order ids/seqs are server-assigned. |
+| Visibility | Per-role, per-field map in `tuning.json`; unknown fields/roles are HIDDEN. |
+| Multiplayer speed | Solo can pick from `allowedSpeedsSolo`; ≥2 players locks to 1× (admin override allowed and logged). |
+| Snapshots | Versioned schema with explicit migrations; unknown versions throw. |
 
-## What's next
+## Phased build
 
-The immediate next task is the **C# port** of the engine spine and the
-macro environment, preserving determinism (xoroshiro128**), the
-`tuning.json` schema, role-based visibility, and snapshot/restore
-semantics. After the port, Phase 1 continues with **company fundamentals**
-(sector groupings, earnings, quality, fair-value priors) and the
-**pricing kernel** (translates fundamentals + macro + order flow into
-prices, subject to the stability caps in `tuning.json`). The
-breakthrough-event subsystem then layers on top of the same event log
-used today for `adminInject`.
+1. **Phase 0 — Foundations** 🔜: tuning loader, PRNG, visibility,
+   session/tick loop, snapshots, admin gate.
+2. **Phase 1 — Simulation engine** 🔜: macro environment → company
+   fundamentals → pricing kernel.
+3. **Phase 2** — instruments, order matching.
+4. **Phase 3** — breakthrough events (data-driven from
+   `tuning.breakthroughs.archetypes`).
+5. **Phase 4** — networking / multiplayer transport.
+6. **Phase 5** — UI.
 
-See [`AGENTS.md`](./AGENTS.md) for the full standing rules.
+## Decisions baked in (mirrored in `tuning.json`)
+
+1. **30-year default career.** `time.defaultCareerYears = 30`,
+   `ticksPerYear = 252`, `maxSimYears = 50` headroom.
+2. **Two roles.** `Admin` and `Standard`.
+3. **Everything tunable.** Magnitudes, probabilities, caps, the
+   visibility map itself, breakthrough archetypes — all in `tuning.json`.
+4. **Player feedback enabled from day 1.**
+   `feedback.playerWealthEffect.enabledFromDay1 = true`. Effect strength
+   scales with AUM share of total market cap.
+5. **Multiplayer-ready from day 1.** Deterministic, server-stamped order
+   queueing; bit-exact snapshots.
+6. **Speed policy.** Solo player can choose any speed in
+   `allowedSpeedsSolo`. Two or more players locks to 1×. Admins can
+   override and the override is logged.
+7. **Public leaderboard by default** (`leaderboard.publicByDefault = true`).
+8. **Breakthrough events.** Defined as data in `tuning.json`
+   (`breakthroughs.archetypes`). Seeded-random generation and admin
+   injection are both intended to be supported.
+
+## Contributing
+
+Read [`AGENTS.md`](./AGENTS.md) first — every PR is reviewed against the
+rules in there.
