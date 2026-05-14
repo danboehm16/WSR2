@@ -108,6 +108,8 @@ The agreed build order is:
 
 1. **Phase 0 — Foundations** ✅ (in TS prototype): tuning, RNG,
    visibility, session/tick loop, snapshots, admin gate.
+   **C# port in progress** (`engine/`): RNG ✅, tuning loader ✅;
+   visibility / session / snapshots 🔜.
 2. **Phase 1 — Simulation engine** 🚧: macro environment ✅ (TS proto);
    company fundamentals 🔜; pricing kernel 🔜.
 3. **Phase 2** — instruments, order matching.

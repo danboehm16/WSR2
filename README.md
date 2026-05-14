@@ -5,10 +5,11 @@ A multiplayer-ready stock-market simulation game.
 > **Heads-up for contributors:** the **core simulation engine is being built
 > in C#** (.NET). The TypeScript code currently in `src/` is an earlier
 > prototype that pre-dates that decision; it works and the tests pass, but
-> it is being ported, not extended. See [`AGENTS.md`](./AGENTS.md) for the
-> full set of standing constraints (determinism, tunability,
-> server-authoritative architecture, role-based visibility, multiplayer
-> speed policy, phased build, …).
+> it is being ported, not extended. The C# scaffold lives in
+> [`engine/`](./engine/) — see [`engine/README.md`](./engine/README.md) for
+> porting status and [`AGENTS.md`](./AGENTS.md) for the full set of standing
+> constraints (determinism, tunability, server-authoritative architecture,
+> role-based visibility, multiplayer speed policy, phased build, …).
 
 This repository is being built up in phases.
 
