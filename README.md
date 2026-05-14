@@ -2,10 +2,18 @@
 
 A multiplayer-ready stock-market simulation game.
 
+> **Heads-up for contributors:** the **core simulation engine is being built
+> in C#** (.NET). The TypeScript code currently in `src/` is an earlier
+> prototype that pre-dates that decision; it works and the tests pass, but
+> it is being ported, not extended. See [`AGENTS.md`](./AGENTS.md) for the
+> full set of standing constraints (determinism, tunability,
+> server-authoritative architecture, role-based visibility, multiplayer
+> speed policy, phased build, …).
+
 This repository is being built up in phases.
 
-- **Phase 0 — Foundations** ✅ (architectural spine: tuning, RNG, visibility, session/tick loop, snapshots)
-- **Phase 1 — Simulation engine** 🚧 (macro environment ✅, company fundamentals 🔜, pricing kernel 🔜)
+- **Phase 0 — Foundations** ✅ (architectural spine: tuning, RNG, visibility, session/tick loop, snapshots) — *prototyped in TS, to be ported to C#*
+- **Phase 1 — Simulation engine** 🚧 (macro environment ✅ in TS prototype, company fundamentals 🔜, pricing kernel 🔜)
 - **Phase 2+** — instruments, breakthrough events, networking, UI
 
 There is no instrument trading, pricing kernel or UI yet. Phase 0 deliberately
@@ -13,7 +21,7 @@ shipped only the spine (determinism, role-based visibility, multiplayer
 session/tick loop, tunability) so nothing has to be retrofitted later. Phase 1
 is now layering the simulation in on top of those hooks.
 
-## What's in the codebase today
+## What's in the codebase today (TS prototype)
 
 | Concern | Where | Notes |
 |---|---|---|
@@ -61,9 +69,14 @@ tuning.json       # all design constants
 
 ## What's next
 
-Phase 1 continues with **company fundamentals** (sector groupings, earnings,
-quality, fair-value priors) and the **pricing kernel** (translates
-fundamentals + macro + order flow into prices, subject to the stability caps
-in `tuning.json`). Both will plug into the existing `Session.tick()` after the
-macro step that's now in place. The breakthrough-event subsystem then layers
-on top of the same event log used today for `adminInject`.
+The immediate next task is the **C# port** of the engine spine and the
+macro environment, preserving determinism (xoroshiro128**), the
+`tuning.json` schema, role-based visibility, and snapshot/restore
+semantics. After the port, Phase 1 continues with **company fundamentals**
+(sector groupings, earnings, quality, fair-value priors) and the
+**pricing kernel** (translates fundamentals + macro + order flow into
+prices, subject to the stability caps in `tuning.json`). The
+breakthrough-event subsystem then layers on top of the same event log
+used today for `adminInject`.
+
+See [`AGENTS.md`](./AGENTS.md) for the full standing rules.
