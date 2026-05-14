@@ -145,6 +145,90 @@ describe("Session — admin", () => {
   });
 });
 
+describe("Session — macro integration", () => {
+  it("exposes initial macro state at session start", () => {
+    const s = newSession();
+    const m = s.getMacroState();
+    expect(m.cyclePhase).toBe(tuning.macro.initial.cyclePhase);
+    expect(m.gdpGrowth).toBe(tuning.macro.initial.gdpGrowth);
+    expect(m.ticksInPhase).toBe(0);
+  });
+
+  it("evolves macro state across ticks (deterministically)", () => {
+    const a = newSession(11);
+    const b = newSession(11);
+    a.run(500);
+    b.run(500);
+    expect(a.getMacroState()).toEqual(b.getMacroState());
+    // and at least ticksInPhase advanced
+    expect(a.getMacroState().ticksInPhase).toBeGreaterThan(0);
+  });
+
+  it("logs phaseRolled events when the cycle phase changes", () => {
+    const s = newSession(1);
+    const startPhase = s.getMacroState().cyclePhase;
+    const maxT = tuning.macro.cycle.maxTicksPerPhase[startPhase];
+    s.run(maxT + 1);
+    const events = s.getEventLog().filter((e) => e.kind === "phaseRolled");
+    expect(events.length).toBeGreaterThan(0);
+  });
+
+  it("includes macro in snapshot and survives round-trip", () => {
+    const s = newSession(99);
+    s.run(200);
+    const snap = s.snapshot();
+    expect(snap.schemaVersion).toBe(2);
+    expect(snap.macro.cyclePhase).toBe(s.getMacroState().cyclePhase);
+
+    const restored = Session.restore(loadTuning(), snap);
+    expect(restored.snapshot()).toEqual(snap);
+
+    s.run(100);
+    restored.run(100);
+    expect(restored.snapshot()).toEqual(s.snapshot());
+  });
+
+  it("migrates a legacy v1 snapshot by re-seeding macro from tuning.initial", () => {
+    // Hand-craft a minimal v1-shaped snapshot.
+    const v1 = {
+      schemaVersion: 1 as 2, // type-cheat: restore() accepts via runtime check
+      seed: "1",
+      rng: { s0: "1", s1: "2" },
+      tickIndex: 0,
+      speed: 1,
+      requestedSpeed: 1,
+      nextOrderId: 1,
+      nextOrderSeq: 1,
+      players: [],
+      pendingOrders: [],
+      eventLog: [],
+    } as unknown as import("../src/session.js").SessionSnapshot;
+
+    const restored = Session.restore(tuning, v1);
+    const m = restored.getMacroState();
+    expect(m.cyclePhase).toBe(tuning.macro.initial.cyclePhase);
+    expect(m.gdpGrowth).toBe(tuning.macro.initial.gdpGrowth);
+    expect(restored.snapshot().schemaVersion).toBe(2);
+  });
+
+  it("rejects unknown snapshot schema versions", () => {
+    const bogus = {
+      schemaVersion: 999,
+      seed: "1",
+      rng: { s0: "1", s1: "2" },
+      tickIndex: 0,
+      speed: 1,
+      requestedSpeed: 1,
+      nextOrderId: 1,
+      nextOrderSeq: 1,
+      players: [],
+      pendingOrders: [],
+      eventLog: [],
+    } as unknown as import("../src/session.js").SessionSnapshot;
+    expect(() => Session.restore(tuning, bogus)).toThrow(/schemaVersion/);
+  });
+});
+
 describe("Session — capacity", () => {
   it("rejects more players than maxPlayersPerSession", () => {
     const s = newSession();

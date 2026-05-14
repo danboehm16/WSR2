@@ -6,6 +6,44 @@
     "maxSimYears": 50,
     "tickIntervalMsAt1x": 1000
   },
+  "macro": {
+    "initial": {
+      "cyclePhase": "Expansion",
+      "gdpGrowth": 0.025,
+      "inflation": 0.022,
+      "policyRate": 0.03,
+      "creditSpread": 0.012,
+      "consumerSentiment": 0.55
+    },
+    "cycle": {
+      "phaseOrder": ["Expansion", "Peak", "Contraction", "Trough"],
+      "minTicksPerPhase": {
+        "Expansion": 504,
+        "Peak": 63,
+        "Contraction": 189,
+        "Trough": 63
+      },
+      "maxTicksPerPhase": {
+        "Expansion": 1764,
+        "Peak": 252,
+        "Contraction": 504,
+        "Trough": 189
+      }
+    },
+    "drift": {
+      "gdpGrowth":         { "mean": 0.025, "reversion": 0.0040, "vol": 0.0009, "min": -0.06,  "max":  0.07 },
+      "inflation":         { "mean": 0.022, "reversion": 0.0030, "vol": 0.0007, "min": -0.02,  "max":  0.10 },
+      "policyRate":        { "mean": 0.03,  "reversion": 0.0020, "vol": 0.0005, "min":  0.0,   "max":  0.12 },
+      "creditSpread":      { "mean": 0.012, "reversion": 0.0050, "vol": 0.0006, "min":  0.001, "max":  0.08 },
+      "consumerSentiment": { "mean": 0.55,  "reversion": 0.0060, "vol": 0.0040, "min":  0.05,  "max":  0.95 }
+    },
+    "phaseBias": {
+      "Expansion":   { "gdpGrowth":  0.00010, "inflation":  0.00003, "policyRate":  0.00002, "creditSpread": -0.00002, "consumerSentiment":  0.00020 },
+      "Peak":        { "gdpGrowth":  0.00000, "inflation":  0.00010, "policyRate":  0.00010, "creditSpread":  0.00000, "consumerSentiment":  0.00005 },
+      "Contraction": { "gdpGrowth": -0.00040, "inflation": -0.00005, "policyRate": -0.00005, "creditSpread":  0.00020, "consumerSentiment": -0.00060 },
+      "Trough":      { "gdpGrowth": -0.00005, "inflation": -0.00010, "policyRate": -0.00010, "creditSpread":  0.00005, "consumerSentiment": -0.00010 }
+    }
+  },
   "multiplayer": {
     "maxPlayersPerSession": 8,
     "speedPolicy": {

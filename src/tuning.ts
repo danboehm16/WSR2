@@ -38,6 +38,45 @@ export interface LeaderboardTuning {
   fields: string[];
 }
 
+export type CyclePhase = "Expansion" | "Peak" | "Contraction" | "Trough";
+
+export interface MacroDriftSpec {
+  mean: number;
+  reversion: number; // per-tick pull toward mean (0..1)
+  vol: number;       // per-tick gaussian std-dev
+  min: number;
+  max: number;
+}
+
+export interface MacroInitial {
+  cyclePhase: CyclePhase;
+  gdpGrowth: number;
+  inflation: number;
+  policyRate: number;
+  creditSpread: number;
+  consumerSentiment: number;
+}
+
+export interface MacroCycleSpec {
+  phaseOrder: CyclePhase[];
+  minTicksPerPhase: Record<CyclePhase, number>;
+  maxTicksPerPhase: Record<CyclePhase, number>;
+}
+
+export type MacroVariable =
+  | "gdpGrowth"
+  | "inflation"
+  | "policyRate"
+  | "creditSpread"
+  | "consumerSentiment";
+
+export interface MacroTuning {
+  initial: MacroInitial;
+  cycle: MacroCycleSpec;
+  drift: Record<MacroVariable, MacroDriftSpec>;
+  phaseBias: Record<CyclePhase, Record<MacroVariable, number>>;
+}
+
 export interface PlayerWealthEffect {
   enabledFromDay1: boolean;
   aumShareToFlowGain: number;
@@ -84,6 +123,7 @@ export interface VisibilityTuning {
 
 export interface Tuning {
   time: TimeTuning;
+  macro: MacroTuning;
   multiplayer: MultiplayerTuning;
   leaderboard: LeaderboardTuning;
   feedback: FeedbackTuning;
@@ -162,7 +202,112 @@ export function validateTuning(raw: unknown): Tuning {
   requireSection("stability");
   requireSection("breakthroughs");
 
+  validateMacro(requireSection("macro"));
+
   return raw as Tuning;
+}
+
+const MACRO_VARS: MacroVariable[] = [
+  "gdpGrowth",
+  "inflation",
+  "policyRate",
+  "creditSpread",
+  "consumerSentiment",
+];
+
+const CYCLE_PHASES: CyclePhase[] = ["Expansion", "Peak", "Contraction", "Trough"];
+
+function validateMacro(macro: Record<string, unknown>): void {
+  const initial = macro.initial as Record<string, unknown> | undefined;
+  if (!initial || typeof initial !== "object") {
+    throw new Error("tuning.macro.initial is required");
+  }
+  if (!CYCLE_PHASES.includes(initial.cyclePhase as CyclePhase)) {
+    throw new Error(
+      `tuning.macro.initial.cyclePhase must be one of [${CYCLE_PHASES.join(",")}]`,
+    );
+  }
+  for (const v of MACRO_VARS) {
+    if (typeof initial[v] !== "number" || !Number.isFinite(initial[v] as number)) {
+      throw new Error(`tuning.macro.initial.${v} must be a finite number`);
+    }
+  }
+
+  const cycle = macro.cycle as Record<string, unknown> | undefined;
+  if (!cycle || typeof cycle !== "object") {
+    throw new Error("tuning.macro.cycle is required");
+  }
+  if (!Array.isArray(cycle.phaseOrder) || (cycle.phaseOrder as unknown[]).length === 0) {
+    throw new Error("tuning.macro.cycle.phaseOrder must be a non-empty array");
+  }
+  for (const p of cycle.phaseOrder as unknown[]) {
+    if (!CYCLE_PHASES.includes(p as CyclePhase)) {
+      throw new Error(`tuning.macro.cycle.phaseOrder contains invalid phase '${String(p)}'`);
+    }
+  }
+  for (const bound of ["minTicksPerPhase", "maxTicksPerPhase"] as const) {
+    const m = cycle[bound] as Record<string, unknown> | undefined;
+    if (!m || typeof m !== "object") {
+      throw new Error(`tuning.macro.cycle.${bound} is required`);
+    }
+    for (const phase of CYCLE_PHASES) {
+      const v = m[phase];
+      if (typeof v !== "number" || !Number.isInteger(v) || v <= 0) {
+        throw new Error(`tuning.macro.cycle.${bound}.${phase} must be a positive integer`);
+      }
+    }
+    // sanity: min <= max per phase
+    if (bound === "maxTicksPerPhase") {
+      const min = cycle.minTicksPerPhase as Record<string, number>;
+      const max = m as unknown as Record<string, number>;
+      for (const phase of CYCLE_PHASES) {
+        if (min[phase] > max[phase]) {
+          throw new Error(`tuning.macro.cycle: minTicksPerPhase.${phase} > maxTicksPerPhase.${phase}`);
+        }
+      }
+    }
+  }
+
+  const drift = macro.drift as Record<string, unknown> | undefined;
+  if (!drift || typeof drift !== "object") {
+    throw new Error("tuning.macro.drift is required");
+  }
+  for (const v of MACRO_VARS) {
+    const spec = drift[v] as Record<string, unknown> | undefined;
+    if (!spec || typeof spec !== "object") {
+      throw new Error(`tuning.macro.drift.${v} is required`);
+    }
+    for (const k of ["mean", "reversion", "vol", "min", "max"]) {
+      if (typeof spec[k] !== "number" || !Number.isFinite(spec[k] as number)) {
+        throw new Error(`tuning.macro.drift.${v}.${k} must be a finite number`);
+      }
+    }
+    if ((spec.min as number) >= (spec.max as number)) {
+      throw new Error(`tuning.macro.drift.${v}: min must be < max`);
+    }
+    if ((spec.reversion as number) < 0 || (spec.reversion as number) > 1) {
+      throw new Error(`tuning.macro.drift.${v}.reversion must be in [0,1]`);
+    }
+    if ((spec.vol as number) < 0) {
+      throw new Error(`tuning.macro.drift.${v}.vol must be >= 0`);
+    }
+  }
+
+  const bias = macro.phaseBias as Record<string, unknown> | undefined;
+  if (!bias || typeof bias !== "object") {
+    throw new Error("tuning.macro.phaseBias is required");
+  }
+  for (const phase of CYCLE_PHASES) {
+    const b = bias[phase] as Record<string, unknown> | undefined;
+    if (!b || typeof b !== "object") {
+      throw new Error(`tuning.macro.phaseBias.${phase} is required`);
+    }
+    for (const v of MACRO_VARS) {
+      if (typeof b[v] !== "number" || !Number.isFinite(b[v] as number)) {
+        throw new Error(`tuning.macro.phaseBias.${phase}.${v} must be a finite number`);
+      }
+    }
+  }
 }
 
 /** Default path: <repo>/tuning.json */

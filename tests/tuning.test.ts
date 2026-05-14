@@ -20,6 +20,26 @@ describe("tuning", () => {
     expect(() => validateTuning({})).toThrow(/time/);
   });
 
+  it("rejects missing macro section", () => {
+    expect(() =>
+      validateTuning({
+        time: { ticksPerYear: 252, defaultCareerYears: 30, maxSimYears: 50, tickIntervalMsAt1x: 1000 },
+        multiplayer: {
+          maxPlayersPerSession: 8,
+          speedPolicy: { soloPlayerControlsSpeed: true, multiplayerLockedTo1x: true, allowedSpeedsSolo: [1] },
+          snapshotEveryTicks: 252,
+          orderQueueDeterministicTiebreak: "playerIdAscending",
+        },
+        leaderboard: { publicByDefault: true, fields: [] },
+        feedback: {},
+        stability: {},
+        breakthroughs: {},
+        visibility: { roles: { Admin: {}, Standard: {} } },
+        // no macro
+      }),
+    ).toThrow(/macro/);
+  });
+
   it("rejects defaultCareerYears > maxSimYears", () => {
     expect(() =>
       validateTuning({

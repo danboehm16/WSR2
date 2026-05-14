@@ -16,7 +16,8 @@ so that nothing has to be retrofitted later.
 | Tuning loader | `src/tuning.ts` | Fail-fast schema validation. |
 | Deterministic PRNG | `src/rng.ts` | xoroshiro128** with snapshot/restore — required for replay & MP determinism. |
 | Role-based visibility | `src/visibility.ts` | Server-side filter. Deny-by-default for unknown fields/roles. |
-| Session + tick loop | `src/session.ts` | Server-authoritative. Deterministic order queue. Snapshot/restore. |
+| Session + tick loop | `src/session.ts` | Server-authoritative. Deterministic order queue. Snapshot/restore (schema v2). |
+| Macro environment | `src/macro.ts` | 4-phase business cycle + OU drift on GDP / inflation / policy rate / credit spread / consumer sentiment. Driven from session RNG. |
 
 ### Decisions baked in from the design discussion
 
@@ -54,7 +55,9 @@ tuning.json       # all design constants
 
 ## What's next
 
-Phase 1 will add the macro engine, company fundamentals, and the pricing
-kernel — all driven through the `Session.tick()` hook that's already in place.
-The breakthrough-event subsystem then layers on top of the same event log used
-today for `adminInject`.
+Phase 1 continues with **company fundamentals** (sector groupings, earnings,
+quality, fair-value priors) and the **pricing kernel** (translates
+fundamentals + macro + order flow into prices, subject to the stability caps
+in `tuning.json`). Both will plug into the existing `Session.tick()` after the
+macro step that's now in place. The breakthrough-event subsystem then layers
+on top of the same event log used today for `adminInject`.

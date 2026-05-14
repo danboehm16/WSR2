@@ -20,6 +20,7 @@
  */
 
 import { Rng, type RngState } from "./rng.js";
+import { Macro, type MacroSnapshot, type MacroState } from "./macro.js";
 import type { Role, Tuning } from "./tuning.js";
 
 export interface PlayerJoinInfo {
@@ -54,7 +55,7 @@ export type AdminAction =
   | { type: "setStandardSpeed"; speed: number }; // admin override allowed even in MP
 
 export interface SessionSnapshot {
-  schemaVersion: 1;
+  schemaVersion: 2;
   seed: string;            // original seed as string
   rng: RngState;           // current RNG cursor
   tickIndex: number;       // ticks elapsed since session start
@@ -64,6 +65,7 @@ export interface SessionSnapshot {
   nextOrderSeq: number;
   players: PlayerState[];
   pendingOrders: Order[];
+  macro: MacroSnapshot;
   /** Append-only event log of public/admin events for replay & audit. */
   eventLog: SessionEvent[];
 }
@@ -74,6 +76,7 @@ export type SessionEvent =
   | { tick: number; kind: "speedChanged";  from: number; to: number; reason: string }
   | { tick: number; kind: "orderQueued";   orderId: number }
   | { tick: number; kind: "orderApplied";  orderId: number }
+  | { tick: number; kind: "phaseRolled";   from: string; to: string }
   | { tick: number; kind: "adminInject";   archetypeId: string; companyId: string; severity: number };
 
 export interface SessionOptions {
@@ -86,6 +89,7 @@ export class Session {
   private readonly tuning: Tuning;
   private readonly seed: bigint;
   private rng: Rng;
+  private macro: Macro;
 
   private players: Map<string, PlayerState> = new Map();
   private pendingOrders: Order[] = [];
@@ -102,6 +106,7 @@ export class Session {
     this.tuning = opts.tuning;
     this.seed = typeof opts.seed === "bigint" ? opts.seed : BigInt(opts.seed);
     this.rng = new Rng(this.seed);
+    this.macro = new Macro(opts.tuning.macro);
     this.startingCash = opts.startingCash ?? 100_000;
   }
 
@@ -266,17 +271,29 @@ export class Session {
   // --- Tick loop ---------------------------------------------------------
 
   /**
-   * Advance the world by one tick. Phase 0 has no pricing kernel yet, so the
-   * tick simply:
-   *   1. Drains the order queue in deterministic order (seq asc).
-   *   2. Records each as `orderApplied` in the event log.
-   *   3. Consumes one RNG draw (so determinism tests have something to bite on).
-   *   4. Increments the tick counter.
+   * Advance the world by one tick. As of Phase 1 (macro slice), the tick:
    *
-   * Future phases will plug the pricing kernel, feedback channels and event
-   * engine in here without changing the queueing semantics.
+   *   1. Steps the macro environment using the session RNG (cycle clock +
+   *      OU drift on every macro variable). Phase rolls are logged.
+   *   2. Drains the order queue in deterministic (seq, playerId) order and
+   *      logs each as `orderApplied`. Pricing/matching lands in a later slice.
+   *   3. Increments the tick counter.
+   *
+   * The pricing kernel and feedback channels will plug in here without
+   * changing queueing semantics or the per-tick RNG budget for macro.
    */
   tick(): void {
+    const phaseBefore = this.macro.getState().cyclePhase;
+    const rolled = this.macro.step(this.rng);
+    if (rolled) {
+      this.eventLog.push({
+        tick: this.tickIndex,
+        kind: "phaseRolled",
+        from: phaseBefore,
+        to: this.macro.getState().cyclePhase,
+      });
+    }
+
     const tiebreak = this.tuning.multiplayer.orderQueueDeterministicTiebreak;
     this.pendingOrders.sort((a, b) => {
       if (a.seq !== b.seq) return a.seq - b.seq;
@@ -288,9 +305,6 @@ export class Session {
       this.eventLog.push({ tick: this.tickIndex, kind: "orderApplied", orderId: o.id });
     }
     this.pendingOrders = [];
-    // Reserved RNG draw: keeps the per-tick stream offset stable so future
-    // additions to the kernel don't shift downstream randomness.
-    this.rng.nextFloat();
     this.tickIndex += 1;
   }
 
@@ -303,7 +317,7 @@ export class Session {
 
   snapshot(): SessionSnapshot {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       seed: this.seed.toString(),
       rng: this.rng.snapshot(),
       tickIndex: this.tickIndex,
@@ -313,26 +327,26 @@ export class Session {
       nextOrderSeq: this.nextOrderSeq,
       players: this.getPlayers().map((p) => ({ ...p, positions: { ...p.positions } })),
       pendingOrders: this.pendingOrders.map((o) => ({ ...o })),
+      macro: this.macro.snapshot(),
       eventLog: this.eventLog.map((e) => ({ ...e })),
     };
   }
 
   static restore(tuning: Tuning, snap: SessionSnapshot, startingCash?: number): Session {
-    if (snap.schemaVersion !== 1) {
-      throw new Error(`Session.restore: unsupported schemaVersion ${snap.schemaVersion}`);
-    }
-    const opts: SessionOptions = { tuning, seed: BigInt(snap.seed) };
+    const migrated = migrateSnapshot(snap, tuning);
+    const opts: SessionOptions = { tuning, seed: BigInt(migrated.seed) };
     if (startingCash !== undefined) opts.startingCash = startingCash;
     const s = new Session(opts);
-    s.rng = new Rng(snap.rng);
-    s.tickIndex = snap.tickIndex;
-    s.speed = snap.speed;
-    s.requestedSpeed = snap.requestedSpeed;
-    s.nextOrderId = snap.nextOrderId;
-    s.nextOrderSeq = snap.nextOrderSeq;
-    s.pendingOrders = snap.pendingOrders.map((o) => ({ ...o }));
-    s.eventLog = snap.eventLog.map((e) => ({ ...e }));
-    s.players = new Map(snap.players.map((p) => [p.playerId, { ...p, positions: { ...p.positions } }]));
+    s.rng = new Rng(migrated.rng);
+    s.tickIndex = migrated.tickIndex;
+    s.speed = migrated.speed;
+    s.requestedSpeed = migrated.requestedSpeed;
+    s.nextOrderId = migrated.nextOrderId;
+    s.nextOrderSeq = migrated.nextOrderSeq;
+    s.pendingOrders = migrated.pendingOrders.map((o) => ({ ...o }));
+    s.eventLog = migrated.eventLog.map((e) => ({ ...e }));
+    s.players = new Map(migrated.players.map((p) => [p.playerId, { ...p, positions: { ...p.positions } }]));
+    s.macro = new Macro(tuning.macro, migrated.macro);
     return s;
   }
 
@@ -341,4 +355,35 @@ export class Session {
   getTickIndex(): number { return this.tickIndex; }
   getEventLog(): readonly SessionEvent[] { return this.eventLog; }
   getPendingOrders(): readonly Order[] { return this.pendingOrders; }
+  getMacroState(): Readonly<MacroState> { return this.macro.getState(); }
+}
+
+/**
+ * Migrate older snapshot schemas to the current shape. Restoring a v1
+ * snapshot (Phase 0) into a v2 engine (Phase 1+) re-seeds macro from
+ * `tuning.macro.initial`, which is the safest available approximation —
+ * v1 sessions had no macro state at all.
+ */
+function migrateSnapshot(snap: SessionSnapshot, tuning: Tuning): SessionSnapshot {
+  // The discriminant is structural; we have to inspect at runtime.
+  const v = (snap as { schemaVersion: number }).schemaVersion;
+  if (v === 2) return snap;
+  if (v === 1) {
+    const init = tuning.macro.initial;
+    return {
+      ...(snap as unknown as Omit<SessionSnapshot, "schemaVersion" | "macro">),
+      schemaVersion: 2,
+      macro: {
+        cyclePhase: init.cyclePhase,
+        ticksInPhase: 0,
+        gdpGrowth: init.gdpGrowth,
+        inflation: init.inflation,
+        policyRate: init.policyRate,
+        creditSpread: init.creditSpread,
+        consumerSentiment: init.consumerSentiment,
+        spareNormal: null,
+      },
+    };
+  }
+  throw new Error(`Session.restore: unsupported schemaVersion ${v}`);
 }

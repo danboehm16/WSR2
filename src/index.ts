@@ -6,6 +6,12 @@ export { loadTuning, validateTuning, defaultTuningPath } from "./tuning.js";
 export type {
   Tuning,
   TimeTuning,
+  MacroTuning,
+  MacroDriftSpec,
+  MacroInitial,
+  MacroCycleSpec,
+  MacroVariable,
+  CyclePhase,
   MultiplayerTuning,
   SpeedPolicy,
   LeaderboardTuning,
@@ -20,6 +26,9 @@ export type {
 
 export { Rng } from "./rng.js";
 export type { RngState } from "./rng.js";
+
+export { Macro } from "./macro.js";
+export type { MacroState, MacroSnapshot } from "./macro.js";
 
 export { isVisible, filterObject, filterPlayers } from "./visibility.js";
 export type { VisibilityContext } from "./visibility.js";
