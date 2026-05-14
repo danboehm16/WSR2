@@ -2,13 +2,18 @@
 
 A multiplayer-ready stock-market simulation game.
 
-This repository contains the **Phase 0 foundations**: the architectural
-scaffolding the rest of the simulator will be built on. There is no pricing
-kernel, no instruments, and no UI yet — Phase 0 deliberately ships the spine
-(determinism, role-based visibility, multiplayer session/tick loop, tunability)
-so that nothing has to be retrofitted later.
+This repository is being built up in phases.
 
-## What's in Phase 0
+- **Phase 0 — Foundations** ✅ (architectural spine: tuning, RNG, visibility, session/tick loop, snapshots)
+- **Phase 1 — Simulation engine** 🚧 (macro environment ✅, company fundamentals 🔜, pricing kernel 🔜)
+- **Phase 2+** — instruments, breakthrough events, networking, UI
+
+There is no instrument trading, pricing kernel or UI yet. Phase 0 deliberately
+shipped only the spine (determinism, role-based visibility, multiplayer
+session/tick loop, tunability) so nothing has to be retrofitted later. Phase 1
+is now layering the simulation in on top of those hooks.
+
+## What's in the codebase today
 
 | Concern | Where | Notes |
 |---|---|---|
@@ -19,7 +24,7 @@ so that nothing has to be retrofitted later.
 | Session + tick loop | `src/session.ts` | Server-authoritative. Deterministic order queue. Snapshot/restore (schema v2). |
 | Macro environment | `src/macro.ts` | 4-phase business cycle + OU drift on GDP / inflation / policy rate / credit spread / consumer sentiment. Driven from session RNG. |
 
-### Decisions baked in from the design discussion
+### Decisions baked in
 
 1. **30-year default career.** `time.defaultCareerYears = 30`, `ticksPerYear = 252`. Stability is a guarantee for at least 30 years of simulated time; `maxSimYears = 50` gives headroom.
 2. **Role-based visibility.** Two built-in roles, `Admin` and `Standard`. Per-field map in `tuning.json` controls what each role sees. Filtering happens server-side at the serialization boundary so privileged data never leaves the server.
@@ -46,6 +51,7 @@ src/
   tuning.ts       # config loader + types
   rng.ts          # deterministic seeded PRNG
   visibility.ts   # role-based field filter
+  macro.ts        # macro environment: cycle phases + OU drift
   session.ts      # server-authoritative session, tick loop, snapshots
   index.ts        # public re-exports
 tests/

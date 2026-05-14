@@ -2,7 +2,7 @@
   "name": "wsr2",
   "version": "0.0.1",
   "private": true,
-  "description": "WSR2 — multiplayer-ready stock market simulation game (Phase 0 foundations)",
+  "description": "WSR2 — multiplayer-ready stock market simulation game",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
