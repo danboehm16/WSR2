@@ -8,40 +8,20 @@
   },
   "macro": {
     "initial": {
-      "cyclePhase": "Expansion",
-      "gdpGrowth": 0.025,
-      "inflation": 0.022,
-      "policyRate": 0.03,
-      "creditSpread": 0.012,
-      "consumerSentiment": 0.55
+      "cyclePhase": "Up",
+      "marketMood": 0.55
     },
     "cycle": {
-      "phaseOrder": ["Expansion", "Peak", "Contraction", "Trough"],
-      "minTicksPerPhase": {
-        "Expansion": 504,
-        "Peak": 63,
-        "Contraction": 189,
-        "Trough": 63
-      },
-      "maxTicksPerPhase": {
-        "Expansion": 1764,
-        "Peak": 252,
-        "Contraction": 504,
-        "Trough": 189
-      }
+      "phaseOrder": ["Up", "Down"],
+      "minTicksPerPhase": { "Up": 504, "Down": 189 },
+      "maxTicksPerPhase": { "Up": 1764, "Down": 504 }
     },
     "drift": {
-      "gdpGrowth":         { "mean": 0.025, "reversion": 0.0040, "vol": 0.0009, "min": -0.06,  "max":  0.07 },
-      "inflation":         { "mean": 0.022, "reversion": 0.0030, "vol": 0.0007, "min": -0.02,  "max":  0.10 },
-      "policyRate":        { "mean": 0.03,  "reversion": 0.0020, "vol": 0.0005, "min":  0.0,   "max":  0.12 },
-      "creditSpread":      { "mean": 0.012, "reversion": 0.0050, "vol": 0.0006, "min":  0.001, "max":  0.08 },
-      "consumerSentiment": { "mean": 0.55,  "reversion": 0.0060, "vol": 0.0040, "min":  0.05,  "max":  0.95 }
+      "marketMood": { "mean": 0.55, "reversion": 0.0060, "vol": 0.0040, "min": 0.05, "max": 0.95 }
     },
     "phaseBias": {
-      "Expansion":   { "gdpGrowth":  0.00010, "inflation":  0.00003, "policyRate":  0.00002, "creditSpread": -0.00002, "consumerSentiment":  0.00020 },
-      "Peak":        { "gdpGrowth":  0.00000, "inflation":  0.00010, "policyRate":  0.00010, "creditSpread":  0.00000, "consumerSentiment":  0.00005 },
-      "Contraction": { "gdpGrowth": -0.00040, "inflation": -0.00005, "policyRate": -0.00005, "creditSpread":  0.00020, "consumerSentiment": -0.00060 },
-      "Trough":      { "gdpGrowth": -0.00005, "inflation": -0.00010, "policyRate": -0.00010, "creditSpread":  0.00005, "consumerSentiment": -0.00010 }
+      "Up":   { "marketMood":  0.00020 },
+      "Down": { "marketMood": -0.00060 }
     }
   },
   "multiplayer": {
@@ -58,24 +38,25 @@
     "publicByDefault": true,
     "fields": ["playerId", "displayName", "totalAum", "returnPct", "rank"]
   },
-  "feedback": {
-    "playerWealthEffect": {
-      "enabledFromDay1": true,
-      "aumShareToFlowGain": 0.5,
-      "flowContributionCap": 0.05,
-      "priceImpactBpsPerAdvPct": 8,
-      "priceImpactCapBps": 150
-    }
+  "impact": {
+    "enabledFromDay1": true,
+    "impactGain": 0.01,
+    "whaleBonusGain": 5.0,
+    "whaleBonusCap": 0.50,
+    "impactCapBps": 150,
+    "baseAdvFraction": 0.002
   },
   "stability": {
     "dailyMoveCapPct": 25,
-    "eventDayDailyMoveCapPct": 60,
-    "sectorTickShockBudgetPct": 15,
-    "marketTickShockBudgetPct": 8
+    "eventDayDailyMoveCapPct": 60
   },
   "breakthroughs": {
     "perCompanyAnnualProbability": 0.02,
-    "severityDistribution": { "type": "truncatedPareto", "alpha": 1.5, "min": 0.1, "max": 1.0 },
+    "severityTiers": [
+      { "name": "small",  "probability": 0.70, "severityMin": 0.10, "severityMax": 0.25 },
+      { "name": "medium", "probability": 0.25, "severityMin": 0.25, "severityMax": 0.50 },
+      { "name": "huge",   "probability": 0.05, "severityMin": 0.50, "severityMax": 0.80 }
+    ],
     "decay": { "defaultHalfLifeTicks": 60 },
     "adminInjectEnabled": true,
     "seededRandomEnabled": true,
@@ -95,24 +76,20 @@
   "visibility": {
     "roles": {
       "Admin": {
-        "macro.gdpGrowth": true, "macro.inflation": true, "macro.policyRate": true,
-        "macro.creditSpread": true, "macro.consumerSentiment": true, "macro.cyclePhase": true,
-        "sector.earningsGrowth": true, "sector.rotationFactor": true, "sector.pe": true,
-        "company.price": true, "company.volume": true, "company.ttmEarnings": true,
-        "company.fairValue": true, "company.qualityScore": true,
-        "company.floatHeldByPlayer": true, "company.playerImpactDecay": true,
+        "macro.marketMood": true, "macro.cyclePhase": true,
+        "sector.scalar": true,
+        "company.price": true, "company.volume": true, "company.sharesOutstanding": true,
+        "company.baseFairValue": true, "company.fairValue": true,
         "player.ownPositions": true, "player.otherPositions": true,
         "leaderboard.basic": true, "leaderboard.detailed": true,
         "events.publicFeed": true, "events.internalRecord": true,
         "session.tickInternals": true, "session.rngCursor": true
       },
       "Standard": {
-        "macro.gdpGrowth": true, "macro.inflation": true, "macro.policyRate": true,
-        "macro.creditSpread": false, "macro.consumerSentiment": true, "macro.cyclePhase": false,
-        "sector.earningsGrowth": true, "sector.rotationFactor": false, "sector.pe": true,
-        "company.price": true, "company.volume": true, "company.ttmEarnings": true,
-        "company.fairValue": false, "company.qualityScore": false,
-        "company.floatHeldByPlayer": false, "company.playerImpactDecay": false,
+        "macro.marketMood": true, "macro.cyclePhase": true,
+        "sector.scalar": true,
+        "company.price": true, "company.volume": true, "company.sharesOutstanding": true,
+        "company.baseFairValue": false, "company.fairValue": false,
         "player.ownPositions": true, "player.otherPositions": false,
         "leaderboard.basic": true, "leaderboard.detailed": false,
         "events.publicFeed": true, "events.internalRecord": false,

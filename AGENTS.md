@@ -298,8 +298,9 @@ top-to-bottom on first encounter:
   pricing kernel will read.
 - **10.5** is the pricing kernel itself -- *the* place where stock
   prices are produced.
-- **10.6 - 10.7** cover the two feedback channels: player order flow,
-  and breakthrough events.
+- **10.6** covers the combined `impact` term (order flow plus the
+  big-player whale bonus).
+- **10.7** covers breakthrough events.
 - **10.8 - 10.9** wrap up role visibility and the snapshot contract.
 
 Magnitudes live in `tuning.json`. This section defines the algorithms,
@@ -307,10 +308,23 @@ units, and invariants that those numbers feed into.
 
 > **Beginner-friendly walkthrough.** A plain-English companion to this
 > section -- with a full glossary, a complete variable/constant
-> reference table, a narrated one-tick example, and game-vs-realism
-> notes -- lives in [`PRICING_MODEL.md`](./PRICING_MODEL.md) at the
-> repo root. This section (10) remains the authoritative contract; if
-> the two ever disagree, this section wins.
+> reference table, a narrated one-tick example, and the rationale for
+> every simplification baked into the current design -- lives in
+> [`PRICING_MODEL.md`](./PRICING_MODEL.md) at the repo root. This
+> section (10) remains the authoritative contract; if the two ever
+> disagree, this section wins.
+
+> **Simplifications applied 2026-05-17.** The model used to track five
+> macro variables (gdpGrowth, inflation, policyRate, creditSpread,
+> consumerSentiment), a four-phase business cycle, a seven-component
+> pricing kernel, a three-stage stability-cap pipeline, separate
+> `orderFlowImpact` / `playerFeedback` terms, and a truncated-Pareto
+> severity distribution. The owner has signed off on collapsing all
+> of that to: one macro variable (`marketMood`), a two-phase cycle
+> (`Up` / `Down`), a five-component kernel, one per-instrument
+> stability cap, one combined `impact` term, and three bucketed
+> severity tiers. The rationale and trade-offs are in
+> `PRICING_MODEL.md` section 13.
 
 Two kinds of unresolved item appear below:
 
@@ -346,47 +360,37 @@ snapshot migration.
                 +-----------+-----------+
                             v
                 +-----------------------+
-                | 2. Sector update      |  reads:  macro
-                |                       |  writes: sector aggregates
-                +-----------+-----------+
-                            v
+                | 2. Fundamentals       |  reads:  macro
+                |    update             |  writes: company.fairValue
+                +-----------+-----------+          (= baseFairValue
+                            v                       * sectorScalar)
                 +-----------------------+
-                | 3. Fundamentals       |  reads:  macro, sector
-                |    update             |  writes: company.ttmEarnings,
-                +-----------+-----------+          company.fairValue, ...
-                            v
-                +-----------------------+
-                | 4. Pricing kernel     |  reads:  macro, sector,
-                |                       |          fundamentals, pending
-                |                       |          orders, active
-                |                       |          breakthrough impulses,
-                |                       |          RNG
+                | 3. Pricing kernel     |  reads:  macro (new + prev),
+                |                       |          fundamentals,
+                |                       |          pending orders,
+                |                       |          active breakthrough
+                |                       |          impulses, RNG
                 |                       |  writes: new mid-price per
                 +-----------+-----------+          instrument
                             v
                 +-----------------------+
-                | 5. Order matching     |  (Phase 2+) match pending
+                | 4. Order matching     |  (Phase 2+) match pending
                 |                       |  orders against the new price
                 |                       |  in (seq, id) order
                 +-----------+-----------+
                             v
                 +-----------------------+
-                | 6. Feedback decay     |  tick down
-                |                       |  company.playerImpactDecay
-                +-----------+-----------+
-                            v
-                +-----------------------+
-                | 7. Breakthrough roll  |  decay active impulses; maybe
+                | 5. Breakthrough roll  |  decay active impulses; maybe
                 |    & decay            |  roll new breakthroughs (RNG)
                 +-----------+-----------+
                             v
                 +-----------------------+
-                | 8. Append event log;  |
+                | 6. Append event log;  |
                 |    tickIndex += 1     |
                 +-----------+-----------+
                             v
                 +-----------------------+
-                | 9. Optional snapshot  |  every
+                | 7. Optional snapshot  |  every
                 |                       |  multiplayer.snapshotEveryTicks
                 +-----------------------+
 ```
@@ -395,24 +399,28 @@ The data flowing between steps is the same on every tick (no early
 exits, no skipped subsystems), which is what makes the engine
 deterministic and replayable.
 
+Steps that were in the old (pre-simplification) pipeline and have
+been **removed**: a separate sector-aggregate step (sectors now
+exist only as a `sectorScalar` consumed by step 2), and a
+"feedback decay" step (the old `company.playerImpactDecay`
+accumulator was part of the two-channel feedback design and is no
+longer needed because there is only one `impact` term and it is
+recomputed from current orders each tick).
+
 ### 10.3. Macro environment (step 1)
 
-**Purpose.** Drive five slow-moving macro variables and a four-phase
-business cycle so the rest of the engine has a coherent backdrop to
-react to.
+**Purpose.** Drive one slow-moving macro variable (`marketMood`)
+and a two-phase business cycle (`Up` / `Down`) so the rest of the
+engine has a coherent backdrop to react to.
 
 **State (all in `MacroState`):**
 
 | Field | Meaning | Clamp range |
 |---|---|---|
-| `gdpGrowth` | Real GDP growth (annualised decimal) | `tuning.macro.drift.gdpGrowth.min..max` |
-| `inflation` | CPI inflation (annualised decimal) | same pattern |
-| `policyRate` | Central-bank short rate (annualised decimal) | same pattern |
-| `creditSpread` | Corporate-bond spread over policy rate | same pattern |
-| `consumerSentiment` | 0..1 index | same pattern |
-| `cyclePhase` | One of `Expansion -> Peak -> Contraction -> Trough` | -- |
-| `ticksInPhase` | Ticks since the current phase started | -- |
-| `spareNormal` | Buffered second Box-Muller sample, or null | -- |
+| `marketMood` | A single 0..1 "how are markets feeling" index. High = optimistic, low = pessimistic. | `tuning.macro.drift.marketMood.min..max` (0.05 .. 0.95) |
+| `cyclePhase` | One of `Up`, `Down`. | -- |
+| `ticksInPhase` | Ticks since the current phase started. | -- |
+| `spareNormal` | Buffered second Box-Muller sample, or null. | -- |
 
 **Algorithm (per tick):**
 
@@ -429,83 +437,110 @@ react to.
      the RNG cursor advances the same number of steps regardless of
      phase outcome.
 
-2. **OU step on each variable**, in fixed order
-   `[gdpGrowth, inflation, policyRate, creditSpread, consumerSentiment]`:
+2. **OU step on `marketMood`:**
 
    ```text
    z      = Normal(0, 1) via Box-Muller from the session RNG
    x_next = x
-          + drift[v].reversion * (drift[v].mean - x)
-          + phaseBias[phase][v]
-          + drift[v].vol * z
-   x_next = clamp(x_next, drift[v].min, drift[v].max)
+          + drift.marketMood.reversion * (drift.marketMood.mean - x)
+          + phaseBias[phase].marketMood
+          + drift.marketMood.vol * z
+   x_next = clamp(x_next, drift.marketMood.min, drift.marketMood.max)
    ```
 
-   The fixed iteration order matters because it determines how many
-   normals the macro step consumes per tick (= 5, plus possibly one
-   uniform for the cycle roll). A stable budget keeps the RNG stream
-   offset bit-exact across runs.
+   With one variable the macro step consumes **exactly one normal
+   per tick** (plus possibly one uniform for the cycle roll). The
+   fixed budget is what keeps the RNG stream offset bit-exact across
+   runs.
 
 3. **Increment** `ticksInPhase += 1`.
 
-**Outputs read by later steps.** Steps 2 and 3 read the whole new
+**Outputs read by later steps.** Steps 2 and 3 read the new
 `MacroState`. The pricing kernel (10.5) reads both the new state
-*and* the previous tick's state so it can compute *changes*, not
-levels.
+*and* the previous tick's `marketMood` so it can compute the
+*change* (`marketMood - prevMarketMood`), not the level.
 
-**Snapshot contribution.** `cyclePhase`, `ticksInPhase`, the five
-variables, and `spareNormal`. All required for bit-exact restore.
+**Snapshot contribution.** `cyclePhase`, `ticksInPhase`,
+`marketMood`, `spareNormal`. All required for bit-exact restore.
 
-**Open questions.** None -- this is the only fully-specified
-subsystem in section 10.
+**Open questions.** None.
 
-### 10.4. Company fundamentals (steps 2 - 3)
+### 10.4. Company fundamentals (step 2)
 
-**Purpose.** Translate macro state into per-sector aggregates and
-per-company fundamentals that the pricing kernel can mean-revert to.
+**Purpose.** Produce one per-company anchor (`fairValue`) that the
+pricing kernel mean-reverts toward.
 
-**Per-company state after step 3:**
+**Formula (final, no longer TBD):**
+
+```text
+company.fairValue = company.baseFairValue * sector.scalar
+```
+
+That is the whole thing. Two scalars, both hand-set per company /
+per sector in `tuning.fundamentals.*` (see 10.4.1). There is no
+per-tick re-derivation from macro state, no earnings model, no
+quality-score curve, no sector-P/E response. The kernel itself
+will read `marketMood` separately (via `moodShock`, see 10.5),
+which is the channel through which the macro environment moves
+prices -- not through `fairValue`.
+
+**Per-company state after step 2:**
 
 | Field | Meaning |
 |---|---|
 | `sectorId` | Which sector the company belongs to. |
-| `ttmEarnings` | Trailing-twelve-month earnings, recomputed each tick from macro + sector. |
-| `qualityScore` | Slow-moving `0..1` index of competitive position. |
-| `sharesOutstanding`, `float` | Capital structure (also drive ADV in 10.6). |
-| `fairValue` | The pricing kernel's mean-reversion anchor. Recomputed each tick from `ttmEarnings`, sector P/E, and a quality multiplier. Admin-visible only. |
+| `sharesOutstanding` | Total shares issued. Drives `baseAdv`. |
+| `baseFairValue` | Per-company anchor, hand-set in tuning. Admin-visible only. |
+| `fairValue` | `baseFairValue * sectorScalar`, recomputed each tick (cheap; lets designers retune `sectorScalar` mid-session). Admin-visible only. |
+| `price` | Current mid-price. Public. |
+| `breakthroughImpulse` | Current decaying impulse from 10.7. Admin-visible. |
+| `hasActiveBreakthrough` | True when `|breakthroughImpulse| > epsilon`. Admin-visible. |
 
-**Per-sector aggregates after step 2:** `earningsGrowth`,
-`rotationFactor` (e.g. cyclicals lead in `Expansion`, defensives lead
-in `Contraction`), `pe`.
+**Per-sector state:**
 
-**Open questions** (all `[TBD]`, must be resolved with the project
-owner before implementing):
+| Field | Meaning |
+|---|---|
+| `sectorScalar` | One number per sector, hand-set in tuning. Public (it's a market-wide multiplier; no point hiding it). |
 
-- The exact `fairValue` formula. Sketch:
-  `fairValue = sector.pe * ttmEarnings * qualityMultiplier(qualityScore)`,
-  but `qualityMultiplier`, the sector-P/E response to macro, and the
-  per-tick update rules for `ttmEarnings` and `qualityScore` are all
-  undecided.
-- Where the magnitudes go: a new `tuning.fundamentals.*` block.
-- Whether sector aggregates carry their own internal state (e.g.
-  rolling earnings momentum) or are recomputed stateless each tick.
+#### 10.4.1. `tuning.fundamentals.*` (does not exist in `tuning.json` yet)
 
-### 10.5. Pricing kernel (step 4) -- how stock prices are calculated
+The block will look like:
+
+```jsonc
+"fundamentals": {
+  "sectors": [
+    { "id": "tech",     "sectorScalar": 1.20 },
+    { "id": "banks",    "sectorScalar": 0.90 },
+    { "id": "consumer", "sectorScalar": 1.05 },
+    { "id": "energy",   "sectorScalar": 0.95 }
+  ],
+  "companies": [
+    { "id": "ACME", "sectorId": "tech",  "baseFairValue": 100.0, "sharesOutstanding": 10000000 },
+    ...
+  ]
+}
+```
+
+The seed list of sectors and companies (ids, scalars,
+`baseFairValue`, `sharesOutstanding`) is `[TBD]` -- it is a content
+decision for the project owner, not a magnitude an agent may
+invent.
+
+### 10.5. Pricing kernel (step 3) -- how stock prices are calculated
 
 **Purpose.** Turn the world state into one new mid-price per
 instrument per tick. This is the heart of the simulation.
 
 **One-sentence overview.** Each tick, for each stock, the kernel
-sums seven named return components into a raw fractional return,
-clamps that raw return through a three-stage stability pipeline, and
+sums **five** named return components into a raw fractional return,
+clamps that raw return through a **single per-instrument cap**, and
 multiplies last tick's price by `(1 + clampedReturn)`.
 
 **Inputs (read-only during the kernel step):**
 
 - The new macro state from step 1, *and* the previous tick's macro
-  state (so changes can be computed).
-- The new sector aggregates from step 2.
-- The company fundamentals from step 3, including `fairValue`.
+  state (so `marketMood` change can be computed).
+- The company fundamentals from step 2, including `fairValue`.
 - The pending orders for this company this tick (each carries
   `playerId`, `side`, `quantity`).
 - Any active breakthrough impulse on the company (10.7).
@@ -519,14 +554,12 @@ multiplies last tick's price by `(1 + clampedReturn)`.
 ```text
 priceReturnRaw =
       fundamentalDrift        # pull toward fairValue
-    + macroShock              # common market-wide factor
-    + sectorShock             # sector-specific factor
+    + moodShock               # market-wide reaction to the change in marketMood
     + breakthroughImpulse     # active breakthrough, decaying
-    + orderFlowImpact         # passive impact of queued orders
-    + playerFeedback          # extra impact when big-AUM players trade
+    + impact                  # combined order-flow + whale bonus (10.6)
     + noise                   # Gaussian residual
 
-priceReturn = applyStabilityCaps(priceReturnRaw, company)
+priceReturn = applyStabilityCap(priceReturnRaw, company)
 newPrice    = max(0.01, prevPrice * (1 + priceReturn))
 ```
 
@@ -535,7 +568,7 @@ can attribute each tick's move to a named cause. Each component is
 itself a signed fractional return (e.g. `+0.003` means "+0.30 % this
 tick"; negative values pull the price down).
 
-**The seven components in detail.** Each block gives purpose, sign
+**The five components in detail.** Each block gives purpose, sign
 convention, illustrative shape, tuning key, and explicit `[TBD]`
 flags for anything not yet decided by the project owner.
 
@@ -548,51 +581,26 @@ flags for anything not yet decided by the project owner.
    - Tuning: `tuning.pricingKernel.fundamentalDriftGain` (`kFund`)
      `[TBD]`.
 
-2. **`macroShock`** -- one common factor shared by every stock this
-   tick, driven by the *change* in macro variables.
-   - Sign: depends on per-variable betas (a positive `gdpGrowth`
-     surprise lifts the market; rising `creditSpread` weighs on it).
+2. **`moodShock`** -- one common factor shared by every stock this
+   tick, driven by the *change* in `marketMood`.
+   - Sign: positive when `marketMood` rose since last tick.
    - Shape `[TBD - illustrative]`:
-     `sum_v ( betaMacro[v] * (macro[v] - prevMacro[v]) )` over the
-     five macro variables.
-   - Tuning: `tuning.pricingKernel.macroBeta[v]` (five betas)
-     `[TBD]`.
+     `moodBeta * (marketMood - prevMarketMood)`.
+   - Tuning: `tuning.pricingKernel.moodBeta` `[TBD]`.
 
-3. **`sectorShock`** -- analogue of `macroShock` using the sector
-   aggregates from step 2 (e.g. rising sector earnings growth lifts
-   stocks in that sector).
-   - Shape `[TBD - illustrative]`: weighted sum of deltas in sector
-     aggregates, with per-sector betas.
-   - Tuning: `tuning.pricingKernel.sectorBeta[sectorId]` `[TBD]`.
-
-4. **`breakthroughImpulse`** -- whatever active impulse the
+3. **`breakthroughImpulse`** -- whatever active impulse the
    breakthrough subsystem (10.7) has stamped on this company this
    tick. Already in fractional-return units. Decays geometrically
    each tick (see 10.7 step 5). No tuning key here; the impulse is
    data produced by 10.7.
 
-5. **`orderFlowImpact`** -- *passive* impact of orders queued this
-   tick on this company. This is the "even with no large players,
-   buying pressure pushes the price up" term.
-   - Inputs:
-     `netSignedQty = sum over queued orders of (side == buy ? +qty : -qty)`,
-     and the company's baseline `baseAdv` (see 10.6).
-   - Sign: same as `netSignedQty` (net buys raise the price, net
-     sells lower it).
-   - Shape `[TBD - illustrative]`:
-     `kFlow * sign(netSignedQty) * (|netSignedQty| / baseAdv) ** alpha`.
-     `alpha < 1` damps the impact of very large orders so a single
-     mega-order cannot break price stability on its own.
-   - Tuning: `tuning.pricingKernel.orderFlowGain` (`kFlow`) and
-     `tuning.pricingKernel.orderFlowExponent` (`alpha`) `[TBD]`.
+4. **`impact`** -- combined effect of orders queued for this stock
+   this tick. Sub-linear in order size and amplified when the
+   trading players are already big holders of the company. Full
+   formula in 10.6. Bounded to `+/- tuning.impact.impactCapBps`
+   (150 bp = 1.5 %) per tick.
 
-6. **`playerFeedback`** -- additional impact when the queued orders
-   come from players already holding a large share of this company's
-   market cap. Full formula in 10.6. Bounded to
-   `+/- feedback.playerWealthEffect.priceImpactCapBps` (150 bp =
-   1.5 %) per tick.
-
-7. **`noise`** -- mean-zero Gaussian residual that gives the price
+5. **`noise`** -- mean-zero Gaussian residual that gives the price
    its tick-to-tick wiggle in the absence of news.
    - Shape: `kNoise * z`, where `z = Normal(0, 1)` from the session
      RNG via Box-Muller.
@@ -604,36 +612,20 @@ flags for anything not yet decided by the project owner.
      tick, every company, even if every other component were zero --
      so the RNG stream offset stays stable across runs.
 
-**Stability caps -- a three-stage pipeline.** Applied to
-`priceReturnRaw` in this order:
+**Stability cap (single stage).** Applied to `priceReturnRaw`:
 
 ```text
-1. Per-instrument cap
-       cap_i = company.hasActiveBreakthrough
-                 ? stability.eventDayDailyMoveCapPct / 100   # 0.60
-                 : stability.dailyMoveCapPct / 100           # 0.25
-       priceReturn_i = clamp(priceReturnRaw_i, -cap_i, +cap_i)
-
-2. Per-sector budget
-       sectorAbsSum = sum over companies in sector of |priceReturn_i|
-       budget       = stability.sectorTickShockBudgetPct / 100  # 0.15
-       if sectorAbsSum > budget:
-           scale = budget / sectorAbsSum
-           priceReturn_i *= scale     for all i in that sector
-
-3. Per-market budget
-       marketAbsSum = sum over all companies of |priceReturn_i|
-       budget       = stability.marketTickShockBudgetPct / 100  # 0.08
-       if marketAbsSum > budget:
-           scale = budget / marketAbsSum
-           priceReturn_i *= scale     for all i
+cap = company.hasActiveBreakthrough
+        ? stability.eventDayDailyMoveCapPct / 100   # 0.60
+        : stability.dailyMoveCapPct / 100           # 0.25
+priceReturn = clamp(priceReturnRaw, -cap, +cap)
 ```
 
-The per-instrument cap is meant as a **per-trading-day** cap: keep a
-running sum of intraday moves and never let it exceed `cap_i`. With
-`ticksPerYear = 252` and one tick per trading day today, the running
-sum equals the single tick's return, but the machinery generalises
-if intraday ticking is added later.
+There is **no** per-sector or per-market budget. The
+per-instrument cap alone keeps any single stock inside a sane
+band; the two budget stages were dropped because they constrained
+the design (cross-stock coupling state) without earning their
+keep for a 30-year game.
 
 **Invariants:**
 
@@ -644,7 +636,7 @@ if intraday ticking is added later.
 - The kernel consumes exactly one normal per company per tick (the
   `noise` term). No conditional draws, no extra draws when orders
   are present.
-- The seven components are summed in the listed order; even when a
+- The five components are summed in the listed order; even when a
   component is currently zero, its slot stays in the sum so future
   numbers reproduce.
 
@@ -658,116 +650,107 @@ Suppose for company ACME on tick `t`:
 |---|---|
 | `prevPrice` | 100.00 |
 | `fairValue` | 102.00 |
+| `marketMood`, `prevMarketMood` | 0.56, 0.55 (mood ticked up) |
 | Active breakthrough? | no |
 | `kFund` | 0.002 |
-| Macro deltas | small positive surprise |
-| Sector | neutral |
-| Net order flow | small net buy |
-| Big-AUM player involved? | no |
+| `moodBeta` | 1.0 |
+| Net order flow | small net buy (impact ~ +3 bp) |
+| Big-AUM player involved? | no (whaleBonus = 0) |
 | `kNoise` | 0.005 |
 | Box-Muller draw `z` | -0.42 |
 
 Then:
 
 ```text
-fundamentalDrift     ~ 0.002 * (ln(102) - ln(100))        ~ +0.000040  (+0.40 bp)
-macroShock           ~ +0.0002                                          (+2 bp)
-sectorShock          ~  0
+fundamentalDrift     ~ 0.002 * (ln(102) - ln(100))    ~ +0.000040  (+0.40 bp)
+moodShock            =  1.0  * (0.56 - 0.55)          = +0.010     (+100 bp)
 breakthroughImpulse  =  0
-orderFlowImpact      ~ +0.0003                                          (+3 bp)
-playerFeedback       ~  0
-noise                = 0.005 * -0.42                      = -0.00210    (-21 bp)
-                                                            ----------
-priceReturnRaw                                             ~ -0.00156   (-15.6 bp)
+impact               ~ +0.0003                                       (+3 bp)
+noise                =  0.005 * -0.42                 = -0.00210    (-21 bp)
+                                                        ----------
+priceReturnRaw                                         ~ +0.00824   (+82 bp)
 ```
 
-`|priceReturnRaw| << 0.25` so the per-instrument cap doesn't bind;
-neither does the sector budget (15 %) nor the market budget (8 %).
-Therefore `priceReturn ~ -0.00156` and
-`newPrice ~ 100.00 * (1 - 0.00156) = 99.84`.
+`|priceReturnRaw| = 0.00824 << 0.25` so the per-instrument cap
+does not bind. Therefore `priceReturn ~ +0.00824` and
+`newPrice ~ 100.00 * (1 + 0.00824) = 100.82`.
 
-The reader should be able to follow the same calculation by hand for
-any future tick and reach the engine's answer to within rounding.
+The reader should be able to follow the same calculation by hand
+for any future tick and reach the engine's answer to within
+rounding.
 
-**Open questions (must be resolved with the project owner before the
-kernel can be implemented):**
+**Open questions (must be resolved with the project owner before
+the kernel can be implemented):**
 
-- All illustrative coefficients: `kFund`, the five `betaMacro[v]`,
-  per-sector `betaSector[sectorId]`, `kFlow`, `alpha`, `kNoise`.
+- All illustrative coefficients: `kFund`, `moodBeta`, `kNoise`.
+  Plus the `tuning.impact.*` coefficients in 10.6 -- those are
+  *already* in `tuning.json` as starter values; the owner can
+  override.
 - Confirmation (or rejection) of the proposed functional shapes
-  above: log-space drift, linear macro/sector betas, power-law
-  order-flow impact, scalar Gaussian noise.
-- Where the coefficients live in `tuning.json`: a new
+  above: log-space drift, linear mood beta, scalar Gaussian noise.
+- Where the kernel coefficients live in `tuning.json`: a new
   `tuning.pricingKernel.*` block.
-- Whether `orderFlowImpact` aggregates per-tick (Phase 1 friendly)
-  or is computed per-order during matching (Phase 2 territory).
 
-### 10.6. Player-wealth feedback (kernel component 6, in detail)
+### 10.6. Combined impact term (kernel component 4)
 
-**Purpose.** Make very large players move markets noticeably more
-than tiny players placing identical orders, but never enough to
-break the simulation.
+**Purpose.** Capture two effects in one formula: (a) net buying or
+selling pressure moves the price even with no big players, and
+(b) very large players move it noticeably more than tiny players
+placing identical orders -- but never enough to break the
+simulation.
 
 **Inputs (per company, per tick):**
 
-- `playerAumInCompany` = sum over players of
-  `player.sharesInCompany * prevPrice`.
-- `companyMarketCap` = `sharesOutstanding * prevPrice`.
-- `netSignedQty` -- same value used by `orderFlowImpact` (component
-  5 in 10.5).
-- `baseAdv` -- baseline average daily volume for the company.
-  `[TBD]` (likely `sharesOutstanding * float * turnover`, with
-  `turnover` in a new `tuning.fundamentals.turnover` field).
+- `netSignedQty = sum over queued orders of (side == buy ? +qty : -qty)`.
+- `aumShare = playerAumInCompany / companyMarketCap`, where
+  `playerAumInCompany = sum over players of (player.sharesInCompany * prevPrice)`
+  and
+  `companyMarketCap = sharesOutstanding * prevPrice`.
+- `baseAdv = sharesOutstanding * tuning.impact.baseAdvFraction`.
+  One tunable fraction, no float/turnover decomposition.
 
-**Formula (current draft -- see *Open questions* below before
-implementing):**
+**Formula (final):**
 
 ```text
-aumShare       = playerAumInCompany / companyMarketCap
-flowAdd        = clamp(aumShareToFlowGain * aumShare,
-                       0,
-                       flowContributionCap)           # capped at 0.05 (5 %)
-effectiveAdv   = baseAdv * (1 + flowAdd)
-impactBps      = priceImpactBpsPerAdvPct
-                 * (netSignedQty / effectiveAdv) * 100
-impactBps      = clamp(impactBps, -priceImpactCapBps, +priceImpactCapBps)
-playerFeedback = impactBps / 10000                    # bps -> decimal
+whaleBonus = min(tuning.impact.whaleBonusGain * aumShare,
+                 tuning.impact.whaleBonusCap)        # capped at 0.50 (+50 %)
+
+impactBps  = tuning.impact.impactGain
+           * (netSignedQty / baseAdv)
+           * (1 + whaleBonus)
+           * 10000                                    # decimal -> bps
+
+impactBps  = clamp(impactBps,
+                   -tuning.impact.impactCapBps,
+                   +tuning.impact.impactCapBps)       # capped at 150 bp
+
+impact     = impactBps / 10000                        # bps -> decimal
 ```
 
-Tuning (already in `tuning.feedback.playerWealthEffect`):
+Sign convention is now unambiguous: bigger AUM share -> bigger
+`whaleBonus` -> bigger `|impact|` for the same `netSignedQty`,
+exactly matching the design intent. (The earlier two-channel design
+had a flagged sign question; collapsing to one term resolved it.)
 
-| Key | Value | Meaning |
+Tuning (already in `tuning.impact`):
+
+| Key | Default | Meaning |
 |---|---|---|
-| `aumShareToFlowGain` | `0.5` | how strongly AUM share inflates ADV |
-| `flowContributionCap` | `0.05` | max ADV inflation (5 %) |
-| `priceImpactBpsPerAdvPct` | `8` | bp of impact per 1 % of ADV traded |
-| `priceImpactCapBps` | `150` | per-tick impact cap (1.5 %) |
+| `enabledFromDay1` | `true` | Whether the channel is on. |
+| `impactGain` | `0.01` | Base impact slope: trading 1x ADV in one tick is a 1 % push before the whale bonus. |
+| `whaleBonusGain` | `5.0` | Slope from AUM share to whale bonus. 1 % AUM share -> +5 % bonus. |
+| `whaleBonusCap` | `0.50` | Hard cap on whale bonus (+50 %). |
+| `impactCapBps` | `150` | Final per-tick cap (1.5 %). |
+| `baseAdvFraction` | `0.002` | `baseAdv = sharesOutstanding * 0.002`. A 10M-share company has ADV 20,000. |
 
-`company.playerImpactDecay` is a short half-life accumulator
-(Admin-visible) so one big trade does not re-impact future ticks
-indefinitely. It is ticked down in pipeline step 6.
+**Open questions.** None. (The two-channel design's three open
+questions -- sign direction, `baseAdv` source, additive-vs-multiplier
+combination -- are all resolved by the single-term formulation.)
 
-**Open questions (flag for the project owner before implementing):**
-
-- **Possible sign error.** With `effectiveAdv = baseAdv * (1 +
-  flowAdd)`, larger player AUM **increases** the assumed ADV, which
-  **decreases** `impactBps`. That is the opposite of the stated
-  intent ("very large players move markets noticeably more").
-  Confirm whether the divisor was meant to be `(1 - flowAdd)`, or
-  whether `flowAdd` was meant to be applied to the numerator (the
-  traded quantity) instead.
-- **`baseAdv` source.** Probably
-  `sharesOutstanding * float * turnover`, with `turnover` a new
-  `tuning.fundamentals.turnover` field. Confirm.
-- **Combination with component 5.** Today the kernel adds
-  `orderFlowImpact + playerFeedback` (additive). The word
-  "amplifier" suggests a multiplier on `orderFlowImpact` instead.
-  Pick one; the choice changes the ceiling on player-driven moves.
-
-### 10.7. Breakthrough events (step 7)
+### 10.7. Breakthrough events (step 5)
 
 **Purpose.** Inject company-specific news shocks (positive or
-negative) so prices move on more than just macro and noise.
+negative) so prices move on more than just `marketMood` and noise.
 
 Breakthrough events are **data, not code**. The set of archetypes
 lives in `tuning.breakthroughs.archetypes`; the engine looks them up
@@ -782,9 +765,18 @@ by id and never hard-codes their behaviour.
    so the stream offset stays stable, regardless of how many events
    actually fire.
 2. **Archetype selection.** Uniform over `archetypes` from the
-   session RNG.
-3. **Severity.** Drawn from `severityDistribution` (truncated
-   Pareto, `alpha = 1.5`, `min = 0.1`, `max = 1.0`).
+   session RNG (one uniform draw).
+3. **Severity.** Two-step bucketed pick:
+   - Draw one uniform `u1` and select a tier from
+     `tuning.breakthroughs.severityTiers` by cumulative probability
+     (today: 70 % small, 25 % medium, 5 % huge).
+   - Draw one uniform `u2` and set
+     `severity = lerp(tier.severityMin, tier.severityMax, u2)`.
+
+   Two uniforms per fired event. Bucketed tiers are easier to
+   reason about and tune than the previous truncated-Pareto draw,
+   and they give designers a recognisable "small / medium / huge"
+   vocabulary in the event log.
 4. **Impulse construction.** Create a `breakthroughImpulse` for the
    target company:
 
@@ -813,31 +805,50 @@ by id and never hard-codes their behaviour.
 - The competitor/supplier graph that decides which companies receive
   `rippleCompetitorsPct` / `rippleSuppliersPct` is `[TBD]`. Likely a
   per-company `relations: { competitors: [...], suppliers: [...] }`
-  block in a new `tuning.companies.*` section; confirm with the
+  block inside `tuning.fundamentals.companies[*]`; confirm with the
   project owner.
 
 ### 10.8. Role visibility (recap)
 
-Pricing-kernel internals -- `company.fairValue`,
-`company.playerImpactDecay`, `company.floatHeldByPlayer`,
+Pricing-kernel internals -- `company.baseFairValue`,
+`company.fairValue`, `company.breakthroughImpulse`,
 `session.rngCursor`, etc. -- MUST be hidden from non-Admin roles per
 `tuning.visibility.roles.Standard`. Any new field added to the
 kernel state in the future MUST be added to the visibility map in
 the same PR (see section 5).
 
+The simplified visibility set is small enough to enumerate here:
+
+- **Public to Standard**: `macro.marketMood`, `macro.cyclePhase`,
+  `sector.scalar`, `company.price`, `company.volume`,
+  `company.sharesOutstanding`, `player.ownPositions`,
+  `leaderboard.basic`, `events.publicFeed`.
+- **Admin-only**: `company.baseFairValue`, `company.fairValue`,
+  `player.otherPositions`, `leaderboard.detailed`,
+  `events.internalRecord`, `session.tickInternals`,
+  `session.rngCursor`.
+
 ### 10.9. Snapshot contract
 
 The snapshot must contain everything required to advance the world
-from that point and produce a byte-for-byte identical future. As of
-schema v2 that is: `seed`, `rng cursor`, `tickIndex`, current and
-requested `speed`, `nextOrderId`, `nextOrderSeq`, `players[]`,
-`pendingOrders[]`, the `macro` block (see 10.3), and the `eventLog`.
+from that point and produce a byte-for-byte identical future. The
+post-simplification snapshot is:
 
-Adding pricing-kernel state (per-company price history, active
-breakthrough impulses, player-impact decay accumulators) requires
-bumping `SchemaVersion` and writing a migration from v2 that
-re-seeds from `tuning.*.initial` -- never silently dropping data
-(see section 7).
+- `seed`, `rng cursor`, `tickIndex`.
+- Current and requested `speed`.
+- `nextOrderId`, `nextOrderSeq`.
+- `players[]`, `pendingOrders[]`.
+- `macro` block: `marketMood`, `cyclePhase`, `ticksInPhase`,
+  `spareNormal`.
+- Per-company breakthrough state: `breakthroughImpulse` (one
+  double; if zero, the company is omitted).
+- `eventLog`.
+
+Schema bumping rules from section 7 still apply: adding any new
+field requires a `SchemaVersion` bump and a migration from the
+previous version that re-seeds missing fields from
+`tuning.*.initial` -- never silently dropping data.
+
 
 ## 11. Phased build
 
@@ -865,20 +876,32 @@ here so they aren't accidentally reverted.)
 - 30-year default career (`time.defaultCareerYears = 30`,
   `ticksPerYear = 252`, `maxSimYears = 50` headroom).
 - Two built-in roles: `Admin`, `Standard`.
-- Player-feedback channel **enabled from day 1**
-  (`feedback.playerWealthEffect.enabledFromDay1 = true`); strength
-  scales with AUM share of total market cap, capped per
-  `priceImpactCapBps`. Full formula in section 10.6.
+- **One macro variable** (`marketMood`), **two cycle phases**
+  (`Up` / `Down`). Five-variable / four-phase macro was dropped on
+  2026-05-17 as a section 13 simplification.
+- **One per-instrument stability cap**
+  (`stability.dailyMoveCapPct = 25`, `eventDayDailyMoveCapPct = 60`).
+  Per-sector and per-market budgets were dropped on 2026-05-17.
+- **One combined `impact` term** (`tuning.impact`) covers both
+  passive order-flow impact and the big-player whale bonus. Capped
+  at `impactCapBps = 150` per tick.
+  `enabledFromDay1 = true`. Full formula in section 10.6.
+- **Two-scalar `fairValue`**: `company.baseFairValue *
+  sector.scalar`. No earnings model, no quality-score curve, no
+  sector P/E.
+- **Five-component pricing kernel** in fixed order
+  (`fundamentalDrift`, `moodShock`, `breakthroughImpulse`,
+  `impact`, `noise`). Section 10.5.
 - Public leaderboard by default (`leaderboard.publicByDefault = true`).
 - Breakthrough events are data, not code. Both seeded-random generation
   and admin injection are intended to be supported. Lifecycle in
-  section 10.7.
+  section 10.7. **Severity tiers** (small 70 % / medium 25 % / huge
+  5 %) replaced the previous truncated-Pareto distribution on
+  2026-05-17.
 - Tick pipeline ordering is locked (section 10.2); reordering requires
-  a `SchemaVersion` bump.
-- Stability caps (`stability.dailyMoveCapPct = 25`,
-  `eventDayDailyMoveCapPct = 60`, `sectorTickShockBudgetPct = 15`,
-  `marketTickShockBudgetPct = 8`) are the final clamp on every price
-  return (section 10.5).
+  a `SchemaVersion` bump. Note that the post-simplification pipeline
+  has **seven** steps, not nine (dropped the separate sector-aggregate
+  step and the feedback-decay step).
 
 ## 13. Process rules for agents
 
