@@ -58,13 +58,17 @@
     "priceSlackPct": 0.02,
     "orderRejectionReasons": [
       "notInControl",
-      "insufficientCash",
+      "creditLimitExceeded",
       "insufficientShares",
       "selfTrade",
       "unknownCompany",
       "nonPositiveQuantity"
     ],
-    "freeFloatInitialPct": 100
+    "freeFloatInitialPct": 100,
+    "loan": {
+      "annualInterestRate": null,
+      "creditLimit": null
+    }
   },
   "breakthroughs": {
     "perCompanyAnnualProbability": 0.02,

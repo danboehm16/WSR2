@@ -75,8 +75,9 @@ company, never directly by a player. A company has:
 - simulation state (`price`, `volume`, `breakthroughImpulse`,
   `fairValue` derivation, `sharesOutstanding`) -- same source,
 - **a cash balance (`cash`)** in `$`, settled on every executed trade
-  (§5). May go negative only if and only if margin/credit is enabled
-  (out of scope today; see §11),
+  (§5). May be **negative**: a shortfall is an implicit interest-bearing
+  loan from the bank. Interest rate and credit limit are deferred to
+  `tuning.game.loan.*` (TBD — see §12),
 - **a holdings ledger** -- a map `companyId -> shares of that other
   company owned by this company`. Self-ownership is forbidden (a
   company cannot buy its own shares; treasury stock is out of scope
@@ -202,16 +203,19 @@ event log. Cascade is possible: losing `C` may transitively cause
 loss of every company `C` controlled. The engine recomputes the
 control closure once per tick and emits one event per change.
 
-### 3.5 The "must control your starter, or lose the game" rule
+### 3.5 Control is not a survival condition
 
-A player **must always control at least one company**. If a player
-ever holds personal `effectiveOwnershipPct < controlThresholdPct` of
-every company in the universe, that player has **been knocked out**;
-see §7.
+A player may, at any point, hold no controlled companies. That alone
+does **not** end their game. They simply cannot submit any orders
+(every order must come from a controlled `acting` company, §4) until
+they regain control of something — which can happen, for example, if
+their personal stake in a previously-minority company crosses the
+threshold via someone else's action, or if a controlled company's
+control closure shifts.
 
-(Edge case: a player who has been knocked out remains in the session
-read-only for the rest of the game, can view leaderboards, and is
-excluded from `effectiveOwnership` calculations for everyone else.)
+The only way a player exits the game is **bankruptcy** (§7.1):
+their `playerWealth` (§5) goes negative and they have no remaining
+shares they can liquidate to recover.
 
 ---
 
@@ -252,13 +256,11 @@ appended. The set of reasons is part of the public API and lives in
 3. `target` must currently exist.
 4. `quantity > 0`.
 5. `acting != target`.
-6. For a **Buy**: at the moment of validation,
-   `acting.cash >= quantity * acting.estimatedFillPrice * (1 +
-   tuning.game.priceSlackPct)`. The slack covers expected per-tick
-   price drift between validation and fill; if the actual fill
-   exceeds available cash, the order is **partially filled up to
-   the cash limit** and the unfilled remainder is cancelled with a
-   `cashShortfall` event.
+6. For a **Buy**: cash sufficiency is **not** a precondition. Cash may
+   go negative; the shortfall is recorded as an implicit loan against
+   `acting` (§5). A buy is only rejected if it would push `acting.cash`
+   below `-tuning.game.loan.creditLimit` (TBD — see §12). Until that
+   tuning is set, the engine treats credit as unlimited.
 7. For a **Sell**: `acting.holdings(target) >= quantity`. A player
    cannot short shares the acting company does not hold (no naked
    shorting; see §11).
@@ -307,8 +309,11 @@ oversight:
 
 A company is, financially, a tuple of:
 
-- `cash`: `double`, in `$`. Range: `[0, +inf)` in the current scope
-  (no negative balances; see §11 for credit).
+- `cash`: `double`, in `$`. Range: `(-inf, +inf)`. A **negative**
+  balance is an implicit interest-bearing loan from the bank. Loan
+  interest rate, credit limit, and repayment schedule live in
+  `tuning.game.loan.*` (TBD — see §12); until those numbers are set,
+  the engine treats credit as unlimited and interest as 0.
 - `holdings: ImmutableDictionary<string, long>`: how many shares of
   each *other* company this one owns. Always `> 0` for present keys;
   zero-quantity entries are removed.
@@ -321,9 +326,11 @@ companyEquity(C) = C.cash + sum_T (C.holdings(T) * T.price)
 
 `companyEquity` is recomputed on demand for UI / leaderboards; it
 is **not** stored in the snapshot (recoverable from snapshotted
-state).
+state). Negative `cash` shows up here as the loan principal weighing
+the company's equity down.
 
-Player wealth (used for the leaderboard) is the natural extension:
+Player wealth (used for the leaderboard **and the bankruptcy test**)
+is the natural extension:
 
 ```text
 playerWealth(P) =
@@ -332,8 +339,11 @@ playerWealth(P) =
 ```
 
 This is the "effective wealth" definition: controlling a company
-counts the entire company toward your score. Non-controlled
-minority stakes only count via the personally-held branch.
+counts the entire company (including any loan balance) toward your
+score. Non-controlled minority stakes only count via the
+personally-held branch.
+
+`playerWealth(P) < 0` is the bankruptcy trigger (§7.1).
 
 ---
 
@@ -356,12 +366,29 @@ the engine sees, it sees during a tick.
 
 ## 7. Win / loss / end-of-game
 
-### 7.1 Loss (knock-out)
+### 7.1 Loss (bankruptcy)
 
-A player is **knocked out** the moment they fail the §3.5 test:
-they no longer control any company. They are flagged
-`isKnockedOut = true` and remain in the session for replay /
-spectator purposes; they cannot submit any further orders.
+A player is **knocked out** only when **both** conditions are true at
+the end of a tick:
+
+1. `playerWealth(P) < 0` (§5) — at current mark-to-market prices,
+   the player's combined cash debts exceed the liquidation value of
+   every share they personally hold and every company they control.
+2. The player has **no remaining shares they can liquidate to
+   recover** — i.e. the sum across all `T` of
+   `P.personalShares(T) + sum over controlled C of C.holdings(T)`
+   is zero, *or* every such share is already trapped in a counterparty
+   that will not buy (the free-float pool exhausted on the sell side;
+   shape **TBD** in §11).
+
+Losing all controlled companies on its own is **not** a knock-out
+condition (§3.5). A player can sit at zero control as long as their
+net worth remains non-negative, and can recover by waiting for prices
+to move or by being voted/bought back into control later.
+
+Once knocked out, the player is flagged `isKnockedOut = true`, may
+not submit orders for the rest of the session, and remains visible
+in replay / spectator UIs.
 
 ### 7.2 End of career
 
@@ -391,9 +418,9 @@ this spec only adds the player/company invariants:
   company on tick 0**, but a company that one player controls
   **can** buy shares of another player's starter company later --
   that is the core of the takeover game.
-- Once a player has lost control of every company (§3.5), they are
-  knocked out (§7.1); the session continues for the remaining
-  players.
+- Once a player goes bankrupt (§7.1) they are knocked out and the
+  session continues for the remaining players. Losing control of
+  every company is **not** sufficient to knock a player out (§3.5).
 
 ---
 
@@ -407,11 +434,14 @@ here so reviewers can audit any new feature against the same checklist:
 1. For every company `C`, the sum of `sharesHeldByOwner(owner, C)`
    across all owners (players + companies + the free-float pool)
    equals `C.sharesOutstanding`. No shares created or destroyed.
-2. For every company `C`, `C.cash >= 0`.
+2. For every company `C`, `C.cash >= -tuning.game.loan.creditLimit`
+   (loans are bounded; an unlimited credit-limit tuning of `null`
+   disables this check).
 3. For every company `C`, `C.holdings` contains no self-reference
    (`C` is not in its own keys) and no zero or negative entries.
-4. For every player `P`, `P` controls at least one company **or**
-   `P.isKnockedOut == true`.
+4. For every player `P`, `P.isKnockedOut == true` iff `P` has
+   triggered the §7.1 bankruptcy test on this or a previous tick.
+   (Losing control of every company is **not** a knock-out condition.)
 5. The control closure (§3.3) is a stable fixed point: re-running
    it produces the same controlled-companies set.
 6. Every executed order has a corresponding `submittedByPlayerId`
@@ -439,10 +469,14 @@ dedicated `TuningException`, etc.
   "starterCompanies": [ "...", ... ],   // companyIds eligible as starters; loader validates each exists in fundamentals.companies
   "priceSlackPct": 0.02,                // §4.2 buy validation slack; 0 .. 1
   "orderRejectionReasons": [            // public, stable string ids; closed set, TBD final list (§12)
-    "notInControl", "insufficientCash", "insufficientShares",
+    "notInControl", "creditLimitExceeded", "insufficientShares",
     "selfTrade", "unknownCompany", "nonPositiveQuantity"
   ],
-  "freeFloatInitialPct": 100            // §11; opening share-of-shares for the synthetic counterparty
+  "freeFloatInitialPct": 100,           // §11; opening share-of-shares for the synthetic counterparty
+  "loan": {                             // §5; bank-loan terms for negative cash balances
+    "annualInterestRate": null,         // decimal (e.g. 0.05 = 5%); TBD (§12)
+    "creditLimit": null                 // max negative cash per company in $; null = unlimited; TBD (§12)
+  }
 }
 ```
 
@@ -500,16 +534,16 @@ explicit owner sign-off before any code lands:
   the player making their controlled company sell some of its
   starter-company holdings back to the player personally). Useful
   flavour but not yet specified.
-- **Margin / credit / negative cash balances.**
 - **Short selling, options, futures, any derivatives.**
 - **Multi-tick settlement (T+1 / T+2), borrow fees, ex-div dates.**
 - **Tender offers, hostile takeovers as distinct atomic actions** --
   in the current spec a takeover is just "the cumulative effect of
   buying past the 20 % threshold". A future PR may add a dedicated
   tender-offer action with poison-pill / white-knight responses.
-- **Delisting, bankruptcy, liquidation.** Companies cannot die in
-  the current scope; `Company.cash >= 0` is a hard invariant and
-  any order that would breach it is rejected.
+- **Delisting and forced company liquidation.** Companies cannot be
+  wound up in the current scope; only *players* exit (via bankruptcy,
+  §7.1). A company with deeply negative cash continues to exist and
+  to trade; only the bank's credit-limit tuning constrains it.
 
 When the project owner is ready to enable any of these, it goes
 into `GAME_SPECS.md` first (because that is where game rules live)
@@ -535,10 +569,12 @@ green** on a coding slice that touches them.
 4. **Order-rejection reason set.** §10 lists a starter set; the
    owner should confirm or extend before the rejection codes are
    wired into the public client API.
-5. **Knock-out leniency.** §7.1 currently knocks a player out the
-   instant they drop below the threshold for every company. Some
-   designs offer a one-tick grace period to allow recovery trades.
-   Default: **no grace period**. Confirm.
+5. **Loan terms.** §5 introduces `tuning.game.loan.annualInterestRate`
+   and `tuning.game.loan.creditLimit` as the knobs that make negative
+   cash bite. Both are `null` (unlimited credit, 0 % interest) until
+   the owner sets numbers. Confirm the desired defaults and the per-
+   tick interest accrual mechanism (compounding cadence,
+   capitalisation into `cash`, event-log entry name).
 6. **Tiebreak for `controlThresholdPct` reached simultaneously by
    two players.** If two players hit exactly 20 % of the same
    company on the same tick, both claim control under §3.3 as
