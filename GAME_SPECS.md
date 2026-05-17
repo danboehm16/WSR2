@@ -77,7 +77,7 @@ company, never directly by a player. A company has:
 - **a cash balance (`cash`)** in `$`, settled on every executed trade
   (§5). May be **negative**: a shortfall is an implicit interest-bearing
   loan from the bank. Interest rate and credit limit are deferred to
-  `tuning.game.loan.*` (TBD — see §12),
+  `tuning.game.loan.*` (TBD -- see §12),
 - **a holdings ledger** -- a map `companyId -> shares of that other
   company owned by this company`. Self-ownership is forbidden (a
   company cannot buy its own shares; treasury stock is out of scope
@@ -208,7 +208,7 @@ control closure once per tick and emits one event per change.
 A player may, at any point, hold no controlled companies. That alone
 does **not** end their game. They simply cannot submit any orders
 (every order must come from a controlled `acting` company, §4) until
-they regain control of something — which can happen, for example, if
+they regain control of something -- which can happen, for example, if
 their personal stake in a previously-minority company crosses the
 threshold via someone else's action, or if a controlled company's
 control closure shifts.
@@ -259,7 +259,7 @@ appended. The set of reasons is part of the public API and lives in
 6. For a **Buy**: cash sufficiency is **not** a precondition. Cash may
    go negative; the shortfall is recorded as an implicit loan against
    `acting` (§5). A buy is only rejected if it would push `acting.cash`
-   below `-tuning.game.loan.creditLimit` (TBD — see §12). Until that
+   below `-tuning.game.loan.creditLimit` (TBD -- see §12). Until that
    tuning is set, the engine treats credit as unlimited.
 7. For a **Sell**: `acting.holdings(target) >= quantity`. A player
    cannot short shares the acting company does not hold (no naked
@@ -312,7 +312,7 @@ A company is, financially, a tuple of:
 - `cash`: `double`, in `$`. Range: `(-inf, +inf)`. A **negative**
   balance is an implicit interest-bearing loan from the bank. Loan
   interest rate, credit limit, and repayment schedule live in
-  `tuning.game.loan.*` (TBD — see §12); until those numbers are set,
+  `tuning.game.loan.*` (TBD -- see §12); until those numbers are set,
   the engine treats credit as unlimited and interest as 0.
 - `holdings: ImmutableDictionary<string, long>`: how many shares of
   each *other* company this one owns. Always `> 0` for present keys;
@@ -371,11 +371,11 @@ the engine sees, it sees during a tick.
 A player is **knocked out** only when **both** conditions are true at
 the end of a tick:
 
-1. `playerWealth(P) < 0` (§5) — at current mark-to-market prices,
+1. `playerWealth(P) < 0` (§5) -- at current mark-to-market prices,
    the player's combined cash debts exceed the liquidation value of
    every share they personally hold and every company they control.
 2. The player has **no remaining shares they can liquidate to
-   recover** — i.e. the sum across all `T` of
+   recover** -- i.e. the sum across all `T` of
    `P.personalShares(T) + sum over controlled C of C.holdings(T)`
    is zero, *or* every such share is already trapped in a counterparty
    that will not buy (the free-float pool exhausted on the sell side;
