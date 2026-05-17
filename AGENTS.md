@@ -215,7 +215,78 @@ suggestions; they're the bar that PRs are reviewed against.
   without explicit approval. Test-only dependencies (xUnit,
   FluentAssertions, etc.) are unrestricted.
 
-## 9. Phased build
+## 9. Code-quality rules (binding)
+
+These rules apply to every change, in every phase. They exist so the
+codebase stays small, simple, and understandable by a novice C#
+developer reading it for the first time.
+
+### Minimal code
+- Write the **smallest amount of code** that correctly solves the
+  problem in front of you. No speculative APIs, no "we'll need it
+  later" scaffolding, no parameters nothing currently passes.
+- Don't add a new class, interface, or layer unless something concrete
+  needs it today. Inline it until a second caller appears.
+- When you touch a file, **remove unnecessary code on sight**: dead
+  branches, unused fields, commented-out blocks, duplicated helpers,
+  TODOs that nobody is going to action. Note the removal in the PR
+  description so the reviewer can sanity-check it.
+- Prefer deleting code over adding code. A PR with a negative line
+  count is a feature, not a bug.
+
+### Simple, readable syntax
+- The bar is **"a novice C# developer should be able to read this and
+  understand what it does on the first pass."** If a line needs a
+  paragraph of comments to explain its mechanics, rewrite the line.
+- Prefer the **simple, reliable, easy-to-maintain solution** over the
+  clever one. No micro-optimisations without a measured reason.
+- Plain `if`/`for`/`switch` over chained LINQ when the loop reads more
+  clearly. Local variables with meaningful names over nested
+  expressions. One responsibility per method; short methods over long
+  ones.
+- Avoid surprising language features (custom operators, reflection
+  tricks, source generators, `dynamic`, `unsafe`) unless there is no
+  reasonable alternative and the alternative is documented in the PR.
+
+### Comments explain *why*, not *what*
+- Add a comment when the code's **reasoning** isn't obvious from the
+  code itself: why this formula, why this ordering, why this guard,
+  why we chose option A over option B, what invariant must hold.
+- Don't restate the code (`// increment i`). Don't narrate the obvious.
+- Public APIs get XML doc comments (`/// <summary>…</summary>`) that
+  describe contract, units, and any determinism / threading
+  constraints — not implementation detail.
+
+### Always review impact on adjacent and dependent code
+- Before you change a type, method, or file, **read what calls it and
+  what it calls** (callers, overrides, tests, snapshot consumers,
+  visibility map entries, `tuning.json` keys it depends on).
+- If your change affects another file's behaviour, fix that file in
+  the same PR (or, if intentionally out of scope, document why in the
+  PR description).
+- The PR description must contain a short **"Impact on adjacent code"**
+  note listing every other file you reviewed and either: (a) what you
+  changed there, or (b) why it didn't need to change.
+
+### Always write tests, always run them
+- Every new public behaviour ships with a test. Every bug fix ships
+  with a test that fails before the fix and passes after.
+- Tests live alongside the production code in `Wsr2.Engine.Tests`,
+  follow the conventions in §8 *Tests*.
+- Before declaring a slice done, run **all** of these locally and
+  ensure they pass:
+
+  ```bash
+  cd engine
+  dotnet build                        # warnings-as-errors must pass
+  dotnet test                         # full xUnit suite must be green
+  dotnet format --verify-no-changes   # no formatting drift
+  ```
+
+  Paste the test summary into the PR description as evidence. "I think
+  it works" is not acceptable.
+
+## 10. Phased build
 
 The agreed build order is:
 
@@ -233,7 +304,7 @@ The agreed build order is:
 Within Phase 1, fundamentals must land before the pricing kernel, since
 the kernel reads fundamentals + macro.
 
-## 10. Decisions baked in
+## 11. Decisions baked in
 
 (These are concrete settings, mostly mirrored in `tuning.json`. Listed
 here so they aren't accidentally reverted.)
@@ -249,13 +320,18 @@ here so they aren't accidentally reverted.)
 - Breakthrough events are data, not code. Both seeded-random generation
   and admin injection are intended to be supported.
 
-## 11. Process rules for agents
+## 12. Process rules for agents
 
 - Make **small, surgical changes**; one PR ≈ one slice from the phased
-  plan.
-- Run `dotnet build` and `dotnet test` before declaring a slice done.
-  Add tests for any new engine behaviour, especially determinism and
-  snapshot round-trip.
+  plan. Keep the diff minimal (see §9 *Code-quality rules*).
+- **Tests-run-and-pass gate.** Before declaring a slice done, run
+  `dotnet build`, `dotnet test`, and `dotnet format
+  --verify-no-changes` from `engine/` and confirm all three pass. Add
+  tests for any new engine behaviour, especially determinism and
+  snapshot round-trip. See §9 *Always write tests, always run them*.
+- **Impact review in every PR.** Every PR description includes the
+  "Impact on adjacent code" note required by §9; reviewers will reject
+  PRs that change a type without acknowledging its callers.
 - Do not delete or weaken determinism, visibility, or tunability tests.
 - If the user says **"continue"**, continue from the next pending item
   in the most recent PR's checklist.

@@ -57,6 +57,7 @@ dotnet format --verify-no-changes   # style gate
 | Visibility | Per-role, per-field map in `tuning.json`; unknown fields/roles are HIDDEN. |
 | Multiplayer speed | Solo can pick from `allowedSpeedsSolo`; ≥2 players locks to 1× (admin override allowed and logged). |
 | Snapshots | Versioned schema with explicit migrations; unknown versions throw. |
+| Code quality | Minimal code, simple syntax readable by a novice, comments explain *why*, review adjacent/dependent code on every change, every PR adds tests and runs `dotnet build` + `dotnet test` + `dotnet format --verify-no-changes` green before declaring done. |
 
 ## Phased build
 

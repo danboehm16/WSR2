@@ -31,6 +31,26 @@ and `.gitignore` remain.
 - **Snapshots.** Versioned `SchemaVersion`; bumping it requires a
   migration path; unknown versions throw.
 
+## Code-quality rules (binding — see AGENTS.md §9)
+
+- **Minimal code.** Write the smallest correct solution; no
+  speculative APIs, no dead code, no "we'll need it later"
+  scaffolding. Remove unnecessary code you encounter on the way.
+- **Simple syntax, novice-readable.** A novice C# developer should
+  understand each line on first read. Prefer the simple, reliable,
+  maintainable solution over the clever one.
+- **Comments explain reasoning.** Add a comment when the *why* isn't
+  obvious. Don't restate the *what*.
+- **Always review adjacent / dependent code** before changing a type,
+  method, or file. List every other file you reviewed and what you
+  changed (or why nothing changed) in the PR description under
+  "Impact on adjacent code".
+- **Always write tests, always run them.** Every new public behaviour
+  ships with a test; every bug fix ships with a regression test.
+  Before declaring done, run `dotnet build`, `dotnet test`, and
+  `dotnet format --verify-no-changes` and paste the result into the
+  PR description.
+
 ## C# style bar (binding — see AGENTS.md §8 for the complete list)
 
 - `<Nullable>enable</Nullable>`,
