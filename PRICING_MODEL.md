@@ -14,69 +14,66 @@ PR to fix this file. The numeric defaults referenced here come from
 
 **Remember the bigger picture.** WSR2 is a **game**, not a real-world
 stock-market simulator. The model only has to feel fair, reactive, and
-fun across a 30-year career. Anything that does not earn its keep
-toward that goal is a candidate for simplification -- see
-[section 13](#13-game-vs-realism-notes-where-the-design-could-be-simpler)
-at the end of this file.
+fun across a 30-year career. The 2026-05-17 design pass deliberately
+collapsed a much more elaborate earlier draft -- five macro variables,
+a four-phase business cycle, seven kernel components, three stacked
+stability caps, two separate impact channels, a fat-tailed severity
+distribution -- down to **one macro variable, two cycle phases, five
+kernel components, one cap, one impact term, three severity buckets**.
+The justification for every cut is in
+[section 13](#13-simplifications-applied-2026-05-17).
 
 ---
 
 ## Table of contents
 
-1. [The model in 12 lines](#1-the-model-in-12-lines)
+1. [The model in 10 lines](#1-the-model-in-10-lines)
 2. [Glossary: every term defined](#2-glossary-every-term-defined)
 3. [Time: what a "tick" is](#3-time-what-a-tick-is)
 4. [The three layers of the world](#4-the-three-layers-of-the-world)
 5. [The pricing kernel as a story](#5-the-pricing-kernel-as-a-story)
-6. [The safety nets (stability caps)](#6-the-safety-nets-stability-caps)
+6. [The safety net (the per-instrument cap)](#6-the-safety-net-the-per-instrument-cap)
 7. [How player trades move prices](#7-how-player-trades-move-prices)
 8. [The news engine (breakthroughs)](#8-the-news-engine-breakthroughs)
 9. [Complete variable and constant reference](#9-complete-variable-and-constant-reference)
 10. [One full tick, narrated end-to-end](#10-one-full-tick-narrated-end-to-end)
 11. [Determinism and snapshots, in 10 lines](#11-determinism-and-snapshots-in-10-lines)
 12. [Open questions and TBDs in one place](#12-open-questions-and-tbds-in-one-place)
-13. [Game-vs-realism notes (where the design could be simpler)](#13-game-vs-realism-notes-where-the-design-could-be-simpler)
+13. [Simplifications applied 2026-05-17](#13-simplifications-applied-2026-05-17)
 
 ---
 
-## 1. The model in 12 lines
+## 1. The model in 10 lines
 
 1. Time advances in fixed-size beats called **ticks**. One tick = one
    trading day. A 30-year career = 7,560 ticks.
-2. Each tick the engine runs nine steps in a fixed order. Step 4 is
-   the **pricing kernel** -- the only place where a stock's price
+2. Each tick the engine runs **seven** steps in a fixed order. Step 3
+   is the **pricing kernel** -- the only place where a stock's price
    actually changes.
-3. The world has three layers stacked on top of each other:
-   **macro** (whole economy) -> **sector** (groups of similar
-   companies) -> **company** (the individual stock).
-4. Macro state is five slow-moving numbers (growth, inflation,
-   interest rate, credit spread, consumer sentiment) and a 4-phase
-   business cycle (Expansion -> Peak -> Contraction -> Trough).
-5. Each macro number wanders around its long-term average, nudged
-   slightly by the current cycle phase. This produces realistic-looking
-   ups and downs without any single "boom" or "bust" being scripted.
-6. Each company has a hidden **fair value** -- what we think the stock
-   "should" cost based on its earnings and which sector it is in. The
-   pricing kernel pulls the price toward this number over time.
-7. Each tick the kernel adds seven small nudges together to produce
-   the day's return: (a) the pull toward fair value, (b) the whole
-   market reacting to macro changes, (c) the sector reacting to its
-   own changes, (d) any active news event, (e) the passive impact of
-   trades queued this tick, (f) extra impact when very big players
-   trade, (g) random Gaussian noise.
-8. The sum is then clamped by three safety nets so no single tick,
-   sector, or whole market can move further than the limits in
-   [`tuning.json`](./tuning.json)'s `stability` block.
-9. Prices never go to zero -- there is a hard floor at $0.01.
-10. **News events** ("breakthroughs") -- inventions, scandals, recalls
-    -- are picked from a data table of archetypes. They give a single
-    big push that then fades away over about 60 ticks.
-11. **Determinism**: the same starting seed always produces the same
-    sequence of prices, on any machine. This is what makes multiplayer
-    fair and replays possible.
-12. **Tunability**: every magnitude in the model lives in
-    [`tuning.json`](./tuning.json). No number a designer might want to
-    tweak is ever hard-coded.
+3. The world has three layers: **macro** (whole economy) -> **sector**
+   (one number per sector) -> **company** (the individual stock).
+4. Macro state is just **one number** (`marketMood`, a 0..1 index)
+   plus a **two-phase cycle** (`Up` / `Down`). Each tick `marketMood`
+   gets a small random nudge and is gently pulled back toward 0.55,
+   biased up in `Up` phases and down in `Down` phases.
+5. Each company has a hidden **fair value** = `baseFairValue *
+   sectorScalar`. Both numbers are designer-set in `tuning.json`. The
+   pricing kernel pulls the price gently toward this anchor.
+6. Each tick the kernel adds **five** small nudges together: (a) the
+   pull toward fair value, (b) market-wide reaction to the *change* in
+   `marketMood`, (c) any active news event, (d) the combined impact
+   of player trades (which is bigger when big players are involved),
+   (e) random Gaussian noise.
+7. The sum is then clamped by **one safety net**: per-instrument move
+   cap (25 % normally, 60 % on event days).
+8. Prices never go to zero -- there is a hard floor at `$0.01`.
+9. **News events** ("breakthroughs") -- inventions, scandals, recalls
+   -- come from a data table of archetypes, with bucketed severity
+   tiers (small 70 %, medium 25 %, huge 5 %). They give a single
+   push that then fades over ~60 ticks.
+10. **Determinism** + **tunability** are non-negotiable: same seed ->
+    same prices, on any machine; every magnitude lives in
+    [`tuning.json`](./tuning.json), no constants hard-coded in code.
 
 ---
 
@@ -91,9 +88,7 @@ will be able to follow the rest of this file.
   company. If a company has 1,000,000 shares and you own 1, you own
   one-millionth of it.
 - **Shares outstanding** -- the total number of shares the company
-  has issued. Used to compute market cap.
-- **Float** -- the fraction of those shares that is actually
-  available to trade (some shares are held long-term and never sold).
+  has issued. Used to compute market cap and `baseAdv`.
 - **Price** -- the current cost of one share, in dollars. In WSR2,
   always a `double` with a hard floor of `$0.01`.
 - **Mid-price** -- the agreed-on "fair price right now" between the
@@ -112,10 +107,13 @@ will be able to follow the rest of this file.
 - **Position** -- how many shares of a given company a player owns.
 - **AUM (assets under management)** -- the total dollar value of
   everything a player owns (cash + every position priced at the
-  current mid-price). Used to size the player-feedback channel and
-  to rank the leaderboard.
+  current mid-price). Used to size the whale-bonus on the impact
+  term and to rank the leaderboard.
 - **Market cap** -- `sharesOutstanding * price`. The total dollar
   value of the whole company.
+- **AUM share (in a company)** -- `playerAumInCompany /
+  companyMarketCap`. A 0..1 number that says "what fraction of this
+  company is held by players right now."
 
 ### Returns and percentages
 
@@ -127,45 +125,40 @@ will be able to follow the rest of this file.
   `150 bp = 1.50 %`. Finance people use this because percentages of
   percentages get confusing fast.
 
-### The "fair value" idea
+### The "fair value" idea (much simpler than the real-world version)
 
-- **Earnings** -- the company's profit. The more money it makes, the
-  more each share should be worth.
-- **TTM earnings (trailing twelve months)** -- the company's profit
-  over the most recent year. In WSR2 this is recomputed each tick
-  from the macro and sector state.
-- **P/E ratio (price-to-earnings)** -- `price / earnings`. A rough
-  shorthand for "how much investors pay per dollar of profit." If
-  P/E is 20 and earnings are $5/share, the price should be about
-  $100/share.
 - **Fair value** -- WSR2's hidden "what should this stock cost?"
-  anchor, recomputed each tick from earnings and the sector's P/E.
-  The pricing kernel uses fair value to pull the price back toward
-  reasonable, so the market does not drift to absurd numbers.
-- **Quality score** -- a slow-moving 0..1 number for each company,
-  meant to nudge the fair-value formula up for "high-quality"
-  companies. (Exactly how it does that is still
-  [TBD](#12-open-questions-and-tbds-in-one-place).)
+  anchor. The pricing kernel uses it to pull the price back toward
+  reasonable, so the market does not drift to absurd numbers. In
+  WSR2 the formula is dead simple: `fairValue = baseFairValue *
+  sectorScalar`.
+- **baseFairValue** -- a hand-set number per company in
+  `tuning.json`. Designers pick it; it does not change during a
+  session.
+- **sectorScalar** -- a hand-set number per sector in `tuning.json`.
+  All companies in a sector get multiplied by the same scalar.
+  Designers can rebalance whole sectors by editing one number.
+
+> Real markets compute fair value from earnings, growth rates,
+> discount rates, and so on. WSR2 explicitly does **not** model any
+> of that -- see [section 13](#13-simplifications-applied-2026-05-17).
 
 ### The wider world
 
 - **Sector** -- a group of similar companies (e.g. all tech firms,
-  all banks). Each company belongs to exactly one sector. Sectors
-  let the model say "tech is up today but banks are down" without
-  needing per-company news.
-- **Sector P/E** -- the typical price-to-earnings ratio for that
-  sector. Drives fair value.
-- **Sector rotation** -- the real-world pattern that different
-  sectors lead the market at different points in the business cycle
-  (e.g. cyclical industries do well in Expansion; defensive ones do
-  well in Contraction). WSR2 captures this with a single per-sector
-  `rotationFactor` value per tick.
-- **Macro** -- the big-picture economy. WSR2 tracks five macro
-  numbers (see [section 4](#4-the-three-layers-of-the-world)) plus a
-  business-cycle phase.
+  all banks). Each company belongs to exactly one sector. In WSR2 a
+  sector is just a name and a single `sectorScalar`.
+- **Macro** -- the big-picture economy. In WSR2 this is one number,
+  `marketMood`.
+- **`marketMood`** -- a single 0..1 mood index. High = optimistic
+  markets; low = pessimistic. Changes slowly tick to tick. This is
+  the **only** macro state; the previous design's gdp / inflation /
+  policy-rate / credit-spread / sentiment quintet collapsed into
+  this one number on 2026-05-17.
 - **Business cycle** -- the slow rhythm of growth and recession.
-  WSR2 simulates it with four named phases in a fixed loop:
-  `Expansion -> Peak -> Contraction -> Trough -> Expansion -> ...`
+  WSR2 has **two phases**: `Up` and `Down`. The current phase
+  applies a small per-tick bias to `marketMood` (positive in `Up`,
+  larger-negative in `Down`).
 
 ### Liquidity and impact
 
@@ -173,13 +166,16 @@ will be able to follow the rest of this file.
   hands per day. A stock with high ADV is "liquid" -- big orders
   barely move its price. A stock with low ADV is "illiquid" -- the
   same big order can swing the price a lot.
-- **baseAdv** -- WSR2's per-company baseline ADV. Exact formula is
-  [TBD](#12-open-questions-and-tbds-in-one-place); most likely
-  `sharesOutstanding * float * turnover` where `turnover` is a new
-  tunable number.
-- **Price impact** -- how far your trade moves the price. In WSR2
-  this is a function of `orderQuantity / ADV`: the more of the day's
-  volume you take, the more the price moves against you.
+- **baseAdv** -- WSR2's per-company baseline ADV. Formula:
+  `baseAdv = sharesOutstanding * tuning.impact.baseAdvFraction`. One
+  tunable fraction, no real-world float/turnover decomposition.
+- **Impact** -- how far an order moves the price. WSR2 combines two
+  effects in one number (see [section 7](#7-how-player-trades-move-prices)):
+  passive size-vs-ADV pressure, and a whale bonus when big players
+  trade.
+- **Whale bonus** -- the multiplier applied to the impact when the
+  trading players are already big holders of the company. Capped at
+  +50 % so even billionaires cannot break the simulation.
 
 ### Volatility and randomness
 
@@ -199,11 +195,11 @@ will be able to follow the rest of this file.
   consume RNG in the same predictable pattern (important for
   determinism).
 - **OU process (Ornstein-Uhlenbeck)** -- a fancy name for a simple
-  idea: a number that randomly wanders around but is gently pulled
-  back toward a long-term average. WSR2 uses one OU process per
-  macro variable so they wander realistically without drifting away
-  forever. The pull-back strength is the **reversion** rate.
+  idea: a number that randomly wanders but is gently pulled back
+  toward a long-term average. WSR2 uses one OU process for
+  `marketMood`. The pull-back strength is the **reversion** rate.
 - **Mean** -- the long-term average the OU process wanders around.
+  For `marketMood` it is 0.55 (slightly above neutral).
 - **Clamp** -- "if it goes above max, set it to max; if it goes
   below min, set it to min." Used everywhere in WSR2 to keep numbers
   inside sane ranges.
@@ -231,10 +227,10 @@ will be able to follow the rest of this file.
 - A **tick** is the smallest unit of simulated time. In WSR2, one
   tick = **one trading day**. The wall-clock pace at 1x speed is
   `time.tickIntervalMsAt1x` = 1000 ms (one real second per tick).
-- A **simulated year** is `time.ticksPerYear` = **252 ticks**
-  (chosen because real stock markets have ~252 trading days/year --
-  it makes the macro tuning numbers feel right, but the engine does
-  not actually care about that pedigree).
+- A **simulated year** is `time.ticksPerYear` = **252 ticks**. (252
+  matches real trading days/year; the engine does not care about
+  the real-world pedigree -- it just makes the macro tuning numbers
+  feel right.)
 - The default career length is `time.defaultCareerYears` = 30 years
   = **7,560 ticks**. The engine must stay numerically stable for at
   least `time.maxSimYears` = 50 years = 12,600 ticks.
@@ -255,18 +251,20 @@ having to wire every stock individually.
 
 ```text
                 +----------------------+
-                | Macro (5 numbers +   |
-                | cycle phase)         |
+                | Macro: 1 number      |
+                | (marketMood)         |
+                | + cyclePhase (Up/Dn) |
                 +----------+-----------+
                            v
             +--------------+--------------+
-            | Sectors (earningsGrowth,    |
-            | rotationFactor, P/E)        |
+            | Sectors: 1 number each      |
+            | (sectorScalar)              |
             +--------------+--------------+
                            v
             +--------------+--------------+
-            | Companies (ttmEarnings,     |
-            | qualityScore, fairValue)    |
+            | Companies: baseFairValue +  |
+            | sharesOutstanding +         |
+            | fairValue (=base*scalar)    |
             +-----------------------------+
                            v
                        prices
@@ -274,72 +272,82 @@ having to wire every stock individually.
 
 ### 4.1 Macro layer (the whole economy)
 
-Five numbers, all evolving slowly via OU drift:
-
-| Field | What it means in one sentence | Default | Range |
+| Field | Meaning | Default | Range |
 |---|---|---|---|
-| `gdpGrowth` | How fast the economy is growing each year. | `0.025` (=2.5 %/yr) | `-0.06 .. 0.07` |
-| `inflation` | How fast prices in general are rising. | `0.022` (=2.2 %/yr) | `-0.02 .. 0.10` |
-| `policyRate` | The central bank's interest rate -- the price of borrowing money. | `0.03` (=3 %) | `0.0 .. 0.12` |
-| `creditSpread` | Extra interest companies pay above the policy rate; rises in scary times. | `0.012` (=1.2 %) | `0.001 .. 0.08` |
-| `consumerSentiment` | A 0..1 mood index; how confident shoppers feel. | `0.55` | `0.05 .. 0.95` |
+| `marketMood` | 0..1 mood index. High = optimistic. | 0.55 | 0.05 .. 0.95 |
+| `cyclePhase` | `Up` or `Down`. | `Up` | -- |
+| `ticksInPhase` | Ticks since the current phase started. | 0 | -- |
+| `spareNormal` | Buffered second Box-Muller sample, or null. | null | -- |
 
-Plus one cycle variable `cyclePhase` which is one of four named
-phases. Each phase has a min/max length and gets nudged toward the
-next one on a linear-ramp probability between those bounds
-(`macro.cycle.minTicksPerPhase` / `maxTicksPerPhase`).
+`marketMood` evolves via one OU process. The four tuning knobs in
+`macro.drift.marketMood` are:
 
-The five OU processes each have four numbers in
-`macro.drift[var]`:
+- `mean = 0.55` -- the long-term average to drift toward.
+- `reversion = 0.0060` -- how strongly to pull back each tick.
+- `vol = 0.0040` -- the per-tick random kick size.
+- `min = 0.05`, `max = 0.95` -- hard clamp range.
 
-- `mean` -- the long-term average to drift toward.
-- `reversion` -- how strongly to pull back each tick. Larger =
-  snappier.
-- `vol` -- the per-tick random kick size.
-- `min` / `max` -- hard clamp range.
+Plus a per-phase bias in `macro.phaseBias[phase].marketMood`:
 
-Plus a small per-phase **bias** in `macro.phaseBias[phase][var]`
-that nudges each variable up or down based on the current cycle
-phase (e.g. `gdpGrowth` gets a `-0.00040` per-tick nudge during
-`Contraction`, so recessions actually feel like recessions).
+| Phase | Per-tick bias on `marketMood` |
+|---|---|
+| `Up` | +0.00020 (gentle upward push) |
+| `Down` | -0.00060 (stronger downward push -- bear markets fall faster than bull markets climb) |
+
+Cycle phase lengths (`macro.cycle.minTicksPerPhase` /
+`maxTicksPerPhase`):
+
+| Phase | Min ticks | Max ticks | Min years | Max years |
+|---|---|---|---|---|
+| `Up` | 504 | 1764 | 2 | 7 |
+| `Down` | 189 | 504 | 0.75 | 2 |
+
+When `ticksInPhase` is between min and max, each tick has a
+probability `p = (ticksInPhase - min) / (max - min)` of switching
+phases. The phase-switch coin flip is deterministic from the RNG.
 
 ### 4.2 Sector layer (groups of companies)
 
-Per tick, per sector, the engine derives three numbers from the
-macro state (the exact formulas are
-[TBD](#12-open-questions-and-tbds-in-one-place)):
+Each sector is **one number**: `sectorScalar`. That's it. The
+sector affects companies through one channel only: it multiplies
+every company's `baseFairValue` to produce its `fairValue`.
 
-- `earningsGrowth` -- how fast companies in this sector are growing
-  their profits.
-- `rotationFactor` -- positive when this sector is leading the
-  market right now, negative when it is lagging. Driven by the
-  cycle phase (e.g. cyclical sectors get a positive `rotationFactor`
-  in `Expansion`, defensive sectors get a positive one in
-  `Contraction`).
-- `pe` -- the typical price-to-earnings ratio for this sector.
+Designers add sectors to `tuning.fundamentals.sectors` (which does
+not exist yet -- it is part of the still-open "company seed list"
+TBD). Example:
 
-These three numbers feed into both `fairValue` (per company) and
-`sectorShock` (per tick, in the pricing kernel).
+```jsonc
+"sectors": [
+  { "id": "tech",     "sectorScalar": 1.20 },
+  { "id": "banks",    "sectorScalar": 0.90 },
+  { "id": "consumer", "sectorScalar": 1.05 },
+  { "id": "energy",   "sectorScalar": 0.95 }
+]
+```
+
+A `sectorScalar` of 1.0 is neutral; > 1.0 makes the whole sector
+trade at a premium to `baseFairValue`; < 1.0 makes it trade at a
+discount.
 
 ### 4.3 Company layer (the individual stock)
 
-Per company, recomputed each tick from macro + sector:
-
-| Field | What it means | Visible to Standard? |
+| Field | Meaning | Visible to Standard? |
 |---|---|---|
 | `sectorId` | Which sector this company belongs to. | yes |
-| `ttmEarnings` | Profit over the last "year" (252 ticks). | yes |
-| `qualityScore` | Slow 0..1 score of "how solid this company is". | no |
 | `sharesOutstanding` | Total shares issued. | yes |
-| `float` | Fraction of shares actually tradable. | yes |
-| `fairValue` | Hidden anchor the pricing kernel pulls toward. | no |
-| `playerImpactDecay` | A short-half-life accumulator so one big player trade does not re-impact every future tick. | no |
+| `baseFairValue` | Per-company "what this stock should cost", hand-set. | no |
+| `fairValue` | `baseFairValue * sectorScalar`. Recomputed each tick (cheap; lets designers retune `sectorScalar` mid-session). | no |
+| `price` | Current mid-price, $0.01 floor. | yes |
+| `volume` | Cumulative shares traded so far. | yes |
+| `breakthroughImpulse` | Current decaying fractional-return impulse. | no |
+| `hasActiveBreakthrough` | `|breakthroughImpulse| > epsilon`. Triggers the 60 % event-day cap. | no |
 
-The `fairValue` formula is **not yet decided**; section 10.4 of
-AGENTS.md notes it should be something like
-`sector.pe * ttmEarnings * qualityMultiplier(qualityScore)` but the
-exact shape and the `qualityMultiplier` curve are
-[TBD](#12-open-questions-and-tbds-in-one-place).
+No `ttmEarnings`, no `qualityScore`, no `floatHeldByPlayer`, no
+`playerImpactDecay`. Those were all dropped on 2026-05-17 as section 13
+simplifications -- earnings and quality were over-engineering for
+a game; the player-impact decay accumulator was needed only by the
+old two-channel feedback design and the new single `impact` term
+recomputes from current orders each tick.
 
 ---
 
@@ -347,89 +355,72 @@ exact shape and the `qualityMultiplier` curve are
 
 Once per tick, for every company, the kernel runs and produces one
 new price. Picture a single stock just sitting there with last
-tick's price. Seven separate forces act on it; the kernel adds them
-up to get one **return** (the percentage change for this tick),
-applies safety brakes, and multiplies last tick's price by
-`(1 + return)`.
+tick's price. **Five** separate forces act on it; the kernel adds
+them up to get one **return** (the percentage change for this
+tick), applies one safety brake, and multiplies last tick's price
+by `(1 + return)`.
 
-### 5.1 The seven forces, in plain English
+### 5.1 The five forces, in plain English
 
 1. **The gravitational pull toward fair value (`fundamentalDrift`)**
 
    We have a hidden idea of what this stock "should" cost
-   (`fairValue`). If the price has drifted away from that anchor,
-   nudge it gently back. If `prevPrice = 100` and `fairValue = 102`,
-   this force is slightly positive; if `prevPrice = 110` and
-   `fairValue = 102`, it is slightly negative. The strength of the
-   pull is a tuning knob called `kFund`
-   ([TBD](#12-open-questions-and-tbds-in-one-place)).
+   (`fairValue = baseFairValue * sectorScalar`). If the price has
+   drifted away from that anchor, nudge it gently back. If
+   `prevPrice = 100` and `fairValue = 102`, this force is slightly
+   positive; if `prevPrice = 110` and `fairValue = 102`, slightly
+   negative. The strength of the pull is a tuning knob called
+   `kFund` ([TBD](#12-open-questions-and-tbds-in-one-place)).
 
    *Why we have it:* without it, the stock would random-walk and
    could drift to $0.01 or $1,000,000 forever.
 
-2. **The whole market reacts to macro news (`macroShock`)**
+2. **The whole market reacts to mood (`moodShock`)**
 
-   When `gdpGrowth` went up since last tick, every stock should
-   lift a little. When `creditSpread` went up (companies' borrowing
-   got more expensive), every stock should sag a little. This force
-   is the *change* in each macro variable times a sensitivity
-   (`betaMacro[var]`,
-   [TBD](#12-open-questions-and-tbds-in-one-place)), summed up.
-   Every stock in the market sees the same `macroShock` this tick.
+   When `marketMood` ticks up since last tick, every stock should
+   lift a little. When it ticks down, every stock should sag a
+   little. This force is `moodBeta * (marketMood -
+   prevMarketMood)`. Every stock in the market sees the same
+   `moodShock` this tick.
 
    *Why we have it:* it gives "market days" where everything moves
-   together, which feels real.
+   together, which feels real. The previous design had five separate
+   beta terms (one per macro variable); collapsing to one beta on
+   one variable is what made the macro layer simple.
 
-3. **The sector reacts to its own news (`sectorShock`)**
-
-   Same idea as `macroShock`, but driven by the sector aggregates
-   (`earningsGrowth`, `rotationFactor`, `pe`). All stocks in the
-   same sector see the same `sectorShock`.
-
-   *Why we have it:* lets tech be up on a day when banks are down,
-   without scripting per-company news.
-
-4. **Active news events (`breakthroughImpulse`)**
+3. **Active news events (`breakthroughImpulse`)**
 
    If a breakthrough event fired on this company recently, the
    leftover impulse adds to today's return. Initially big, decays
-   over about 60 ticks (see [section 8](#8-the-news-engine-breakthroughs)).
+   over ~60 ticks (see [section 8](#8-the-news-engine-breakthroughs)).
    This is already a fractional return; no extra coefficient.
 
    *Why we have it:* drama. Stocks that just had a "BlockbusterLaunch"
    should jump.
 
-5. **Passive impact of queued orders (`orderFlowImpact`)**
+4. **Combined impact of player trades (`impact`)**
 
    Add up the orders queued for this stock this tick: net buys
-   minus net sells = `netSignedQty`. If players are net buying, the
-   price goes up a little even before matching. The bigger the net
-   relative to the stock's typical daily volume (`baseAdv`), the
-   bigger the push -- but the relationship is **sub-linear** (a
-   power law with exponent `alpha < 1`) so a single mega-order
-   cannot single-handedly break the price.
+   minus net sells = `netSignedQty`. Compute how big that is
+   relative to the stock's baseline daily volume (`baseAdv`).
+   Multiply by `(1 + whaleBonus)` where `whaleBonus` grows with
+   the fraction of the company already held by players. Cap the
+   result at +/- 150 bp. See [section 7](#7-how-player-trades-move-prices)
+   for the full formula.
 
    *Why we have it:* buying pressure should visibly affect prices,
-   even without big-AUM players.
+   and big players should matter more than tiny ones. The previous
+   design split this into two separate terms with a flagged sign
+   bug; combining them resolved the bug.
 
-6. **Bonus impact when very big players trade (`playerFeedback`)**
-
-   If the players queueing orders this tick already own a big chunk
-   of the company's market cap, *their* trades land harder than
-   anonymous trades of the same size. See
-   [section 7](#7-how-player-trades-move-prices) for the formula. Capped
-   at `priceImpactCapBps` = 150 bp = 1.50 % per tick.
-
-   *Why we have it:* makes "whales" matter. Without it, the
-   richest player feels the same as anyone else.
-
-7. **Random Gaussian wiggle (`noise`)**
+5. **Random Gaussian wiggle (`noise`)**
 
    A draw from the bell curve, scaled by `kNoise`
    ([TBD](#12-open-questions-and-tbds-in-one-place); think 50 bp
    per tick = 0.5 %). Same distribution every tick, every company.
 
    *Why we have it:* a market that only reacts to news feels lifeless.
+
    *Note:* this is the **only** kernel component that consumes the
    RNG, and it consumes **exactly one** Gaussian draw per company
    per tick. This is what keeps the RNG stream offset bit-exact
@@ -439,19 +430,17 @@ applies safety brakes, and multiplies last tick's price by
 
 ```text
 priceReturnRaw = fundamentalDrift
-               + macroShock
-               + sectorShock
+               + moodShock
                + breakthroughImpulse
-               + orderFlowImpact
-               + playerFeedback
+               + impact
                + noise
 ```
 
 The order is fixed so debug logs can attribute today's move to a
-named cause. Even when a component is currently zero, its slot stays
-in the sum.
+named cause. Even when a component is currently zero, its slot
+stays in the sum.
 
-Then safety nets (next section) clamp the result, and:
+Then the safety net (next section) clamps the result, and:
 
 ```text
 newPrice = max(0.01, prevPrice * (1 + clampedReturn))
@@ -461,101 +450,100 @@ The `max(0.01, ...)` is the hard floor that keeps prices positive.
 
 ---
 
-## 6. The safety nets (stability caps)
+## 6. The safety net (the per-instrument cap)
 
 `priceReturnRaw` could theoretically be huge if every force pulled
-the same way at once. We do not want the game to feature random
-+200 % days. Three safety nets, applied in order, prevent that.
+the same way at once. We do not want random +200 % days. WSR2
+applies **one** cap, per-instrument:
 
-All three come from `tuning.stability`.
-
-### 6.1 Per-instrument cap
-
-Limit any *single* stock's per-tick move:
-
-- Normal day: +/- `dailyMoveCapPct` = **25 %**.
+- Normal day: +/- `stability.dailyMoveCapPct` = **25 %**.
 - Day when a breakthrough event is active on this stock: +/-
-  `eventDayDailyMoveCapPct` = **60 %** (so news can actually move
-  the price).
+  `stability.eventDayDailyMoveCapPct` = **60 %** (so news can
+  actually move the price).
 
 If `|priceReturnRaw|` is larger than the cap, clamp it.
 
-### 6.2 Per-sector budget
+That's it. There is no per-sector budget, no per-market budget.
+The earlier design had three stacked caps; they were dropped as a
+section 13 simplification because they constrained the design with
+cross-stock coupling state (a sector budget needs the engine to
+remember the running sum across all stocks in the sector that
+tick) without earning their keep for a 30-year game. One
+per-instrument cap is plenty: each stock cannot move more than
+25 % a day (60 % on event days), and that bound alone keeps the
+whole market behaved.
 
-Add up the absolute returns of every stock in a sector this tick.
-If that total exceeds `sectorTickShockBudgetPct` = **15 %**,
-proportionally shrink every stock in that sector so the total
-matches the budget.
-
-*Why:* prevents a "tech sector up 80 % across the board" tick.
-
-### 6.3 Per-market budget
-
-Same thing, but across the whole market: total absolute return
-must not exceed `marketTickShockBudgetPct` = **8 %**.
-
-*Why:* prevents whole-market panic/euphoria from running away.
-
-These caps are deliberately tight. Real markets occasionally do
-have +/- 10 % single-day moves; WSR2 will not. That is a
-**deliberate game-design choice** -- predictable bounds make the
-game playable.
+Real markets occasionally do have +/- 10 % single-day moves;
+WSR2 will not. That is a **deliberate game-design choice** --
+predictable bounds make the game playable.
 
 ---
 
 ## 7. How player trades move prices
 
-Two separate forces, both already mentioned above, work together:
-
-- **`orderFlowImpact`** (kernel component 5) -- passive impact based
-  only on *how much* is being traded vs the stock's typical volume.
-  Every player counts equally per share.
-- **`playerFeedback`** (kernel component 6) -- *bonus* impact when
-  the trading players already hold a large chunk of the company.
-
-### 7.1 The `playerFeedback` formula in plain English
+In WSR2, trade-driven price movement is **one** combined formula
+(it used to be two separate channels):
 
 ```text
-aumShare       = (total $ value of all players' positions in this company)
-                 / (this company's total market cap)
+netSignedQty  = sum over queued orders of (buy ? +qty : -qty)
+baseAdv       = sharesOutstanding * tuning.impact.baseAdvFraction
+aumShare      = playerAumInCompany / companyMarketCap
 
-flowAdd        = min( aumShareToFlowGain * aumShare ,  flowContributionCap )
-                                                       # capped at 5 %
+whaleBonus    = min(tuning.impact.whaleBonusGain * aumShare,
+                    tuning.impact.whaleBonusCap)   # capped at +50 %
 
-effectiveAdv   = baseAdv * (1 + flowAdd)
+impactBps     = tuning.impact.impactGain
+              * (netSignedQty / baseAdv)
+              * (1 + whaleBonus)
+              * 10000                              # decimal -> bps
 
-impactBps      = priceImpactBpsPerAdvPct
-                 * (netSignedQty / effectiveAdv) * 100
+impactBps     = clamp(impactBps,
+                      -tuning.impact.impactCapBps,
+                      +tuning.impact.impactCapBps)  # capped at 150 bp
 
-impactBps      = clamp(impactBps,  -priceImpactCapBps , +priceImpactCapBps)
-                                                       # capped at 150 bp
-
-playerFeedback = impactBps / 10000     # convert bp -> fractional return
+impact        = impactBps / 10000                   # bps -> decimal
 ```
 
-Tuning knobs (already in `tuning.feedback.playerWealthEffect`):
+Tuning knobs (in `tuning.impact`):
 
 | Knob | Default | What it does |
 |---|---|---|
-| `aumShareToFlowGain` | `0.5` | How strongly player AUM share inflates assumed ADV. |
-| `flowContributionCap` | `0.05` | Max ADV inflation (5 %). |
-| `priceImpactBpsPerAdvPct` | `8` | bp of impact per 1 % of ADV traded. |
-| `priceImpactCapBps` | `150` | Hard cap on per-tick impact (1.5 %). |
+| `enabledFromDay1` | `true` | Whether the channel is on. |
+| `impactGain` | `0.01` | Base impact slope. Trading 1x ADV in one tick is a +1.0 % push before the whale bonus. |
+| `whaleBonusGain` | `5.0` | Slope from `aumShare` to whale bonus. 1 % AUM share -> +5 % bonus. |
+| `whaleBonusCap` | `0.50` | Hard cap on whale bonus (+50 %). |
+| `impactCapBps` | `150` | Final per-tick cap (1.5 %). |
+| `baseAdvFraction` | `0.002` | `baseAdv = sharesOutstanding * 0.002`. A 10M-share company has ADV 20,000. |
 
-### 7.2 Heads-up: there is a flagged design question here
+**Sign convention is now unambiguous.** More AUM share -> bigger
+`whaleBonus` -> bigger `|impact|` for the same `netSignedQty`,
+exactly matching the design intent ("very large players move
+markets noticeably more"). The earlier two-channel design had a
+flagged sign bug; collapsing to one term resolved it.
 
-This formula has an **unresolved sign question** flagged in
-AGENTS.md section 10.6: with `effectiveAdv = baseAdv * (1 + flowAdd)`,
-larger player AUM *increases* the assumed ADV, which *decreases*
-the impact. That is the opposite of the stated intent ("very large
-players move markets noticeably more").
+### Worked example
 
-This file deliberately reproduces the current formula faithfully
-rather than silently fixing it. The owner needs to decide whether
-the divisor should be `(1 - flowAdd)`, whether `flowAdd` should
-apply to the numerator instead, or whether the intent statement
-itself should be reworded. See
-[section 12](#12-open-questions-and-tbds-in-one-place).
+ACME has `sharesOutstanding = 10,000,000`. So `baseAdv = 20,000`
+shares/day. Suppose this tick:
+
+- `netSignedQty = +500` (small net buy).
+- Players collectively hold 2 % of ACME, so `aumShare = 0.02`.
+
+Then:
+
+```text
+whaleBonus = min(5.0 * 0.02, 0.50)         = 0.10        (+10 % bonus)
+impactBps  = 0.01 * (500/20000) * (1+0.10) * 10000
+           = 0.01 * 0.025 * 1.10 * 10000
+           = 2.75 bps
+impactBps  = clamp(2.75, -150, +150)        = 2.75
+impact     = 2.75 / 10000                   = +0.000275  (+2.75 bp)
+```
+
+So this tick's order flow adds about +2.75 bp to ACME's return.
+A whale that single-handedly owned 10 % of ACME and placed the
+same +500-share order would get `whaleBonus = min(0.5, 0.5) = 0.50`,
+i.e. `impact = +3.75 bp` -- noticeably more, but bounded.
 
 ---
 
@@ -573,22 +561,25 @@ Each tick, on each company, the engine maybe rolls a news event.
    per year on average.
 2. **Pick an archetype.** Uniform random pick from
    `tuning.breakthroughs.archetypes` (10 archetypes today;
-   see the [reference table](#96-tuning-constants-referenced-by-the-pricing-model)).
-3. **Pick a severity.** Drawn from a truncated Pareto distribution
-   (`alpha = 1.5`, range 0.1 .. 1.0). Translation: most events are
-   small, but you occasionally get a big one -- the bell-curve has
-   a fat tail.
-4. **Build the impulse.** Use the archetype's `direction`,
-   `minPct`, `maxPct` to compute the initial size of the shock:
+   see the [reference table](#94-tuning-constants-referenced-by-the-pricing-model)).
+3. **Pick a severity (two-step bucketed pick).**
+   - Draw one uniform `u1` and select a tier from
+     `tuning.breakthroughs.severityTiers` by cumulative probability:
+     - 70 % `small` (severity 0.10..0.25)
+     - 25 % `medium` (severity 0.25..0.50)
+     - 5 % `huge` (severity 0.50..0.80)
+   - Draw one uniform `u2` and set `severity = lerp(tier.severityMin,
+     tier.severityMax, u2)`.
+4. **Build the impulse.**
 
    ```text
    impulse = direction * lerp(minPct, maxPct, severity) / 100
    ```
 
-   Also build smaller ripple impulses for competitor and supplier
+   Plus smaller ripple impulses for competitor and supplier
    companies, scaled by `rippleCompetitorsPct` and
    `rippleSuppliersPct`. (The competitor/supplier graph itself is
-   [TBD](#12-open-questions-and-tbds-in-one-place).)
+   still [TBD](#12-open-questions-and-tbds-in-one-place).)
 5. **Decay.** Each subsequent tick, every active impulse multiplies
    by `0.5 ^ (1 / decay.defaultHalfLifeTicks)` = `0.5 ^ (1/60)`.
    In words: it loses half its strength every 60 ticks. After
@@ -617,15 +608,21 @@ competitor/supplier companies' breakthrough impulses.
 
 When `breakthroughs.adminInjectEnabled = true`, an Admin player can
 fire any `(archetypeId, companyId, severity)` directly. This skips
-the dice roll and severity sampling but runs the same impulse
-construction. Used for narrative / story-driven sessions.
+the dice rolls and goes straight to step 4. Used for narrative /
+story-driven sessions.
 
-### 8.4 Why this design
+### 8.4 Why bucketed tiers (not Pareto)?
 
-It is **data-driven** -- the engine never hard-codes "what a fraud
-scandal does". Designers can add archetypes by editing
-`tuning.json`. New archetype + new column in the visibility map and
-you are done.
+The earlier design used a truncated Pareto distribution
+(`alpha = 1.5`, range 0.1..1.0). It produced realistic fat-tail
+behaviour but was opaque to designers: a `severity = 0.42` draw
+told you nothing about how that compared to a typical event.
+
+Bucketed tiers give designers a recognisable "small / medium /
+huge" vocabulary. Event-log readouts can say "huge
+BreakthroughInvention" or "small EfficiencyGain", and the
+probability of each is one number in `tuning.json` they can
+directly tweak.
 
 ---
 
@@ -654,50 +651,27 @@ pricing model is here.
 
 | Name | Type | Meaning | Clamped to | Visible to Standard? |
 |---|---|---|---|---|
-| `gdpGrowth` | double | Real GDP growth (annual decimal). | `drift.gdpGrowth.min..max` = `-0.06..0.07` | yes |
-| `inflation` | double | CPI inflation (annual decimal). | `-0.02..0.10` | yes |
-| `policyRate` | double | Central-bank short rate. | `0..0.12` | yes |
-| `creditSpread` | double | Corporate-bond spread over policy rate. | `0.001..0.08` | no |
-| `consumerSentiment` | double | 0..1 mood index. | `0.05..0.95` | yes |
-| `cyclePhase` | enum | Expansion / Peak / Contraction / Trough. | -- | no |
+| `marketMood` | double | 0..1 mood index. | `drift.marketMood.min..max` = `0.05..0.95` | yes |
+| `cyclePhase` | enum | `Up` / `Down`. | -- | yes |
 | `ticksInPhase` | int | Ticks elapsed in the current phase. | `0..maxTicksPerPhase[phase]` | (admin) |
-| `spareNormal` | double? | Buffered second Box-Muller sample, or null. | -- | (admin) |
+| `spareNormal` | double? | Buffered second Box-Muller sample. | -- | (admin) |
 
-### 9.3 Per-sector state (computed every tick from macro)
-
-| Name | Type | Meaning | TBD? |
-|---|---|---|---|
-| `earningsGrowth` | double | Per-sector profit growth rate. | formula TBD |
-| `rotationFactor` | double | Positive when this sector leads. | formula TBD |
-| `pe` | double | Sector-level price/earnings ratio. | formula TBD |
-
-### 9.4 Per-company state
+### 9.3 Per-company state
 
 | Name | Type | Meaning | Visible to Standard? |
 |---|---|---|---|
 | `sectorId` | string | Which sector. | yes |
 | `sharesOutstanding` | long | Total shares issued. | yes |
-| `float` | double | Fraction tradable. | yes |
-| `ttmEarnings` | double | Profit over last 252 ticks. | yes |
-| `qualityScore` | double (0..1) | Slow-moving competitive-position score. | no |
-| `fairValue` | double | Hidden mean-reversion anchor. | no |
-| `playerImpactDecay` | double | Decaying record of recent player impact. | no |
+| `baseFairValue` | double | Per-company anchor, hand-set in tuning. | no |
+| `fairValue` | double | `baseFairValue * sectorScalar`. | no |
 | `price` (mid) | double | Current price, $0.01 floor. | yes |
 | `volume` | long | Cumulative shares traded so far. | yes |
-| `hasActiveBreakthrough` | bool | Is there a non-zero impulse on us? | no |
 | `breakthroughImpulse` | double | Current decaying fractional-return impulse. | no |
+| `hasActiveBreakthrough` | bool | True when `|impulse| > epsilon`. Triggers the 60 % cap. | no |
 
-### 9.5 Per-tick scratch state (the kernel reads these but they do not need to be in the snapshot)
+Per-sector state is just one number: `sectorScalar`. Public.
 
-| Name | Type | Meaning |
-|---|---|---|
-| `netSignedQty` (per company) | long | Sum of queued order quantities, buys positive, sells negative. |
-| `playerAumInCompany` (per company) | double | Sum over all players of `sharesInCompany * prevPrice`. |
-| `companyMarketCap` | double | `sharesOutstanding * prevPrice`. |
-| `baseAdv` | double | Baseline ADV; formula [TBD](#12-open-questions-and-tbds-in-one-place). |
-| `prevMacroState` | object | Last tick's macro snapshot, so the kernel can compute deltas. |
-
-### 9.6 Tuning constants referenced by the pricing model
+### 9.4 Tuning constants referenced by the pricing model
 
 Everything below is in [`tuning.json`](./tuning.json).
 
@@ -709,72 +683,59 @@ Everything below is in [`tuning.json`](./tuning.json).
 | `maxSimYears` | 50 | Stability target (= 12,600 ticks). |
 | `tickIntervalMsAt1x` | 1000 | Wall-clock ms per tick at 1x. |
 
-#### `macro.initial` -- seed values for a brand-new session
+#### `macro.initial`
 | Key | Default |
 |---|---|
-| `cyclePhase` | "Expansion" |
-| `gdpGrowth` | 0.025 |
-| `inflation` | 0.022 |
-| `policyRate` | 0.03 |
-| `creditSpread` | 0.012 |
-| `consumerSentiment` | 0.55 |
+| `cyclePhase` | "Up" |
+| `marketMood` | 0.55 |
 
 #### `macro.cycle.minTicksPerPhase` / `maxTicksPerPhase`
 | Phase | min ticks | max ticks | min years | max years |
 |---|---|---|---|---|
-| Expansion | 504 | 1764 | 2 | 7 |
-| Peak | 63 | 252 | 0.25 | 1 |
-| Contraction | 189 | 504 | 0.75 | 2 |
-| Trough | 63 | 189 | 0.25 | 0.75 |
+| Up | 504 | 1764 | 2 | 7 |
+| Down | 189 | 504 | 0.75 | 2 |
 
-The phaseOrder is fixed: `Expansion -> Peak -> Contraction -> Trough -> Expansion -> ...`.
+`phaseOrder` is fixed: `Up -> Down -> Up -> Down -> ...`.
 
-#### `macro.drift[var]` -- the OU process for each variable
-Each variable has: `mean`, `reversion`, `vol`, `min`, `max`.
+#### `macro.drift.marketMood`
+| Key | Default | Meaning |
+|---|---|---|
+| `mean` | 0.55 | Long-term average. |
+| `reversion` | 0.0060 | Strength of pull-back per tick. |
+| `vol` | 0.0040 | Per-tick random kick sigma. |
+| `min` | 0.05 | Hard lower clamp. |
+| `max` | 0.95 | Hard upper clamp. |
 
-| Variable | mean | reversion | vol | min | max |
-|---|---|---|---|---|---|
-| gdpGrowth | 0.025 | 0.0040 | 0.0009 | -0.06 | 0.07 |
-| inflation | 0.022 | 0.0030 | 0.0007 | -0.02 | 0.10 |
-| policyRate | 0.03 | 0.0020 | 0.0005 | 0.00 | 0.12 |
-| creditSpread | 0.012 | 0.0050 | 0.0006 | 0.001 | 0.08 |
-| consumerSentiment | 0.55 | 0.0060 | 0.0040 | 0.05 | 0.95 |
+#### `macro.phaseBias`
+| Phase | Per-tick bias on `marketMood` |
+|---|---|
+| Up | +0.00020 |
+| Down | -0.00060 |
 
-How to read it: each tick, `x_next = x + reversion * (mean - x) + phaseBias + vol * Normal(0,1)`, then clamp to `[min, max]`.
+Bear markets fall faster than bull markets climb -- the bias
+magnitudes are deliberately asymmetric.
 
-#### `macro.phaseBias[phase][var]` -- per-phase nudge
-
-The full 4-by-5 matrix is in `tuning.json`. Picture it as: each
-phase gently steers each macro variable in a particular direction.
-Highlights:
-- `Expansion`: nudges `consumerSentiment` up.
-- `Peak`: nudges `inflation` and `policyRate` up.
-- `Contraction`: nudges `gdpGrowth` and `consumerSentiment` down,
-  `creditSpread` up.
-- `Trough`: gently negative nudges everywhere, smaller magnitudes.
-
-#### `feedback.playerWealthEffect`
+#### `impact`
 | Key | Default | Used for |
 |---|---|---|
-| `enabledFromDay1` | true | Whether the feedback channel is on. |
-| `aumShareToFlowGain` | 0.5 | Slope from AUM share to ADV inflation. |
-| `flowContributionCap` | 0.05 | Max ADV inflation (5 %). |
-| `priceImpactBpsPerAdvPct` | 8 | Slope from order/ADV to impact bps. |
-| `priceImpactCapBps` | 150 | Per-tick impact cap (1.5 %). |
+| `enabledFromDay1` | true | Whether the channel is on. |
+| `impactGain` | 0.01 | Base impact slope. |
+| `whaleBonusGain` | 5.0 | Slope from `aumShare` to whale bonus. |
+| `whaleBonusCap` | 0.50 | Hard cap on whale bonus (+50 %). |
+| `impactCapBps` | 150 | Per-tick impact cap (1.5 %). |
+| `baseAdvFraction` | 0.002 | `baseAdv = sharesOutstanding * 0.002`. |
 
 #### `stability`
 | Key | Default | Used for |
 |---|---|---|
 | `dailyMoveCapPct` | 25 | Per-instrument per-tick cap (normal day). |
 | `eventDayDailyMoveCapPct` | 60 | Per-instrument cap on event days. |
-| `sectorTickShockBudgetPct` | 15 | Per-sector per-tick total absolute return budget. |
-| `marketTickShockBudgetPct` | 8 | Per-market per-tick total absolute return budget. |
 
 #### `breakthroughs`
 | Key | Default | Used for |
 |---|---|---|
-| `perCompanyAnnualProbability` | 0.02 | Per-company expected events per year. |
-| `severityDistribution` | truncated Pareto, alpha=1.5, 0.1..1.0 | How dramatic events tend to be. |
+| `perCompanyAnnualProbability` | 0.02 | Expected events per company per year. |
+| `severityTiers[]` | small 70 %, medium 25 %, huge 5 % | Bucketed severity. |
 | `decay.defaultHalfLifeTicks` | 60 | Impulse halves every 60 ticks. |
 | `adminInjectEnabled` | true | May Admins fire events directly. |
 | `seededRandomEnabled` | true | May the engine roll events on its own. |
@@ -789,24 +750,27 @@ Highlights:
 | `snapshotEveryTicks` | 252 | Once per simulated year. |
 | `orderQueueDeterministicTiebreak` | "playerIdAscending" | Deterministic order in ties. |
 
-#### `pricingKernel.*` (new section; **does not exist yet**)
+#### `pricingKernel.*` (**does not exist in `tuning.json` yet**)
 
 Once the project owner signs off on the coefficient values, a new
-`pricingKernel` block goes into `tuning.json`. AGENTS.md section
-10.5 says it will contain:
+`pricingKernel` block goes into `tuning.json`. It will contain:
 
 | Key | Used for | Status |
 |---|---|---|
 | `fundamentalDriftGain` (`kFund`) | Strength of pull toward fair value. | TBD |
-| `macroBeta[var]` (5 entries) | Per-variable sensitivity for `macroShock`. | TBD |
-| `sectorBeta[sectorId]` | Per-sector sensitivity for `sectorShock`. | TBD |
-| `orderFlowGain` (`kFlow`) | Strength of passive order-flow impact. | TBD |
-| `orderFlowExponent` (`alpha`, <1) | Sub-linear power law on order size. | TBD |
+| `moodBeta` | Slope of `moodShock` per unit `marketMood` change. | TBD |
 | `noiseSigma` (`kNoise`) | Per-tick Gaussian noise sigma. | TBD |
 
-#### `fundamentals.*` (new section; **does not exist yet**)
+(Only three coefficients -- down from six in the pre-2026-05-17
+design, because `macroBeta[v]` collapsed from 5 to 1, `sectorBeta`
+went away entirely with sector-rotation, and `orderFlowGain` /
+`orderFlowExponent` collapsed into the single `impact` term.)
 
-For the `fairValue` formula and the `baseAdv` formula. Also TBD.
+#### `fundamentals.*` (**does not exist in `tuning.json` yet**)
+
+For the per-sector `sectorScalar` list and the per-company
+`baseFairValue` + `sharesOutstanding` list. Still TBD pending the
+company seed list.
 
 ---
 
@@ -816,112 +780,103 @@ Pretend it is tick 1,000 of a 30-year session. There are 4 sectors,
 100 companies, 3 players. The macro state was the default at tick 0
 and has been wandering since. Here is what the engine does this
 tick, in order. Numbers in the example are illustrative -- they
-assume the `[TBD]` coefficients above; do not treat them as
+assume the `[TBD]` kernel coefficients above; do not treat them as
 specification.
 
 ### Step 1: macro step
 
 The macro engine:
-1. Checks the cycle clock: we are in `Expansion`, `ticksInPhase = 1000`.
-   That is past `minTicksPerPhase[Expansion]` = 504 but well below
-   `maxTicksPerPhase[Expansion]` = 1764. So roll the dice: draw one
+
+1. Checks the cycle clock: we are in `Up`, `ticksInPhase = 1000`.
+   That is past `minTicksPerPhase[Up]` = 504 but well below
+   `maxTicksPerPhase[Up]` = 1764. So roll the dice: draw one
    uniform `u`. Probability of advancing this tick is
    `p = (1000 - 504) / (1764 - 504) ~ 0.39`. Say `u = 0.71 > 0.39`
-   -> stay in Expansion. (`u` was still consumed; that is why the
-   RNG cursor advances deterministically.)
-2. For each of the five macro variables, in fixed order, draw one
-   Gaussian via Box-Muller and step the OU process. Say `gdpGrowth`
-   was `0.027` and the draw nudges it to `0.0273`.
+   -> stay in `Up`. (`u` was still consumed; that is why the RNG
+   cursor advances deterministically.)
+2. OU step `marketMood`: draw one Gaussian via Box-Muller and step
+   the OU process. Say `marketMood` was `0.55` and the draw nudges
+   it to `0.56`.
 3. `ticksInPhase` becomes 1001.
 
-### Step 2: sector update
+RNG budget for the macro step: 1 uniform + 1 normal (one Box-Muller
+call, which consumes 2 uniforms internally). Stable every tick.
 
-For each of the 4 sectors, recompute `earningsGrowth`,
-`rotationFactor`, `pe` from the new macro state. (Exact formula
-TBD; conceptually: cyclical sectors get a positive `rotationFactor`
-because we are in `Expansion`; sector P/E rises slightly when
-`policyRate` falls.)
+### Step 2: fundamentals update
 
-### Step 3: company fundamentals update
+For each of the 100 companies, recompute
+`fairValue = baseFairValue * sectorScalar`. ACME has
+`baseFairValue = 100` and is in the tech sector with
+`sectorScalar = 1.20`, so `fairValue = $120.00`.
 
-For each of the 100 companies, recompute `ttmEarnings`,
-`qualityScore`, and `fairValue` from macro + sector. Suppose ACME
-ends up with `ttmEarnings = $4.50/share`, `qualityMultiplier =
-1.05`, sector P/E `= 21`, so `fairValue = 21 * 4.50 * 1.05
-= $99.23`.
+Yes, this is the entire fundamentals step. Two multiplications per
+company. No earnings model, no quality curve.
 
-### Step 4: pricing kernel (the heart of it)
+### Step 3: pricing kernel (the heart of it)
 
-For ACME, with `prevPrice = $100.00`, `fairValue = $99.23`, no
-active breakthrough, illustrative coefficients:
+For ACME, with `prevPrice = $100.00`, `fairValue = $120.00`,
+`marketMood = 0.56`, `prevMarketMood = 0.55`, no active
+breakthrough, small net buy (+500 shares), no whales involved,
+`baseAdv = 20,000`:
 
 ```text
-fundamentalDrift     = kFund * (ln(99.23) - ln(100.00))
-                     ~ 0.002 * (-0.0077)        = -0.0000154   (-0.15 bp)
-macroShock           = sum over 5 vars: betaMacro[v] * (macro[v] - prevMacro[v])
-                                                 ~ +0.00010    (+1.0 bp)
-sectorShock          = sum over sector aggregates
-                                                 ~ +0.00005    (+0.5 bp)
-breakthroughImpulse  = 0
-orderFlowImpact      = kFlow * sign(netQ) * (|netQ|/baseAdv)^alpha
-                       (today netQ = +500 shares, baseAdv = 50,000)
-                                                 ~ +0.00015    (+1.5 bp)
-playerFeedback       = (see formula in section 7) for whales who own >2 % of ACME
-                                                 ~  0          (no whales today)
-noise                = kNoise * Gaussian draw
-                       (z = -0.42, kNoise = 0.005)
-                                                 = -0.00210    (-21.0 bp)
-
-priceReturnRaw       sum                          ~ -0.00190    (-19.0 bp)
+fundamentalDrift     = kFund * (ln(120.00) - ln(100.00))
+                     ~ 0.002 * 0.1823                  = +0.000365   (+3.65 bp)
+moodShock            = moodBeta * (0.56 - 0.55)
+                     = 1.0 * 0.01                      = +0.0100     (+100 bp)
+breakthroughImpulse  =  0
+impact               = 0.01 * (500/20000) * (1+0) * 10000
+                     = 2.5 bps                         = +0.000250   (+2.5 bp)
+noise                = 0.005 * z  (z = -0.42)          = -0.00210    (-21.0 bp)
+                                                         ----------
+priceReturnRaw                                          ~ +0.00852   (+85.2 bp)
 ```
 
-Stability caps:
-- Per-instrument cap on a normal day = 25 % = 0.25.
-  `|-0.00190| << 0.25` -> no clamp.
-- Sector budget = 15 % across all sector members -> no clamp.
-- Market budget = 8 % across whole market -> no clamp.
+Stability cap on a normal day = +/- 25 %. `|+0.00852| << 0.25` ->
+no clamp. So `priceReturn = +0.00852` and
+`newPrice = max(0.01, 100.00 * (1 + 0.00852)) = $100.85`.
 
-So `priceReturn = -0.00190`, and
-`newPrice = max(0.01, 100.00 * (1 - 0.00190)) = $99.81`.
+RNG budget for the kernel: exactly 1 normal per company. With 100
+companies, 100 normals.
 
-### Step 5: order matching
+### Step 4: order matching
 
 (Phase 2+) Pair buy and sell orders in their server-assigned
 `(seq, id)` order, fill them at the new price, update player cash
 and positions, append fill events to the event log.
 
-### Step 6: feedback decay
-
-Tick down `playerImpactDecay` on every company by its short
-half-life so yesterday's whale trade does not influence forever.
-
-### Step 7: breakthrough roll & decay
+### Step 5: breakthrough roll & decay
 
 For each company, draw one uniform from the RNG. With per-tick
 probability `0.02 / 252 ~ 0.0000794`, almost every roll fails.
-Suppose one of the 100 companies rolls a success: pick an archetype
-(uniform over the 10), pick a severity (truncated Pareto), build
-the impulse, write impulses on the company and on its competitors
-and suppliers (graph TBD). All existing impulses decay by
-`0.5^(1/60)` ~ 0.9885 (lose about 1.15 % of their strength each
-tick).
+Suppose one of the 100 companies rolls a success:
 
-### Step 8: event log and tick advance
+- Draw one uniform for archetype pick (uniform over 10).
+- Draw one uniform `u1` for the tier pick. Say `u1 = 0.62` -> falls
+  in the first 0.70 bucket -> tier is `small`.
+- Draw one uniform `u2 = 0.5` for the in-tier severity ->
+  `severity = lerp(0.10, 0.25, 0.5) = 0.175`.
+- Build the impulse and any ripples on competitors/suppliers.
+
+All existing impulses decay by `0.5^(1/60)` ~ 0.9885 (lose about
+1.15 % of their strength each tick).
+
+RNG budget for breakthroughs: 100 uniforms (1 per company for the
+Bernoulli) + 0 or more triples (3 uniforms per fired event:
+archetype, tier, in-tier severity).
+
+### Step 6: event log and tick advance
 
 Append everything that just happened (phase rolls, breakthroughs,
 fills) to the event log. `tickIndex` becomes 1001.
 
-### Step 9: optional snapshot
+### Step 7: optional snapshot
 
-Every 252 ticks (= once per simulated year), write a snapshot. At
-tick 1000 there is no snapshot; at tick 1008 (if ticks 0, 252, 504,
-756, 1008 are the snapshot ticks) there would be.
+Every 252 ticks (= once per simulated year), write a snapshot.
 
-That is the whole tick. 100 companies x 1 Gaussian draw each + 5
-macro Gaussian draws + 1 cycle-clock draw + 100 breakthrough rolls
-+ N order-matching consequences. The next tick consumes the same
-RNG budget in the same order, which is what makes the simulation
-bit-exact reproducible.
+That is the whole tick. The next tick consumes the same RNG budget
+in the same order, which is what makes the simulation bit-exact
+reproducible.
 
 ---
 
@@ -937,7 +892,9 @@ bit-exact reproducible.
    never from clients.
 5. Snapshots include everything needed to resume: seed, RNG cursor,
    `tickIndex`, speeds, order counters, players, pending orders,
-   the macro block, and the event log.
+   the macro block (`marketMood`, `cyclePhase`, `ticksInPhase`,
+   `spareNormal`), per-company `breakthroughImpulse`, and the
+   event log.
 6. Snapshots have a `SchemaVersion`. Adding fields requires bumping
    the version and writing a migration that re-seeds missing fields
    from `tuning.*.initial`.
@@ -953,128 +910,183 @@ bit-exact reproducible.
 
 ## 12. Open questions and TBDs in one place
 
-These items are intentionally left **undecided** in AGENTS.md
-section 10. Per the standing rule (AGENTS.md section 13), an agent
-must **not invent** any of these values. The project owner needs to
-sign off, and the agreed values then go into `tuning.json`.
+Most of the items here used to be a long list. The section 13
+simplifications closed many of them. What remains:
 
 ### Pricing-kernel coefficients (will land in a new `tuning.pricingKernel.*` block)
 
 - `fundamentalDriftGain` (`kFund`).
-- `macroBeta[var]` for the 5 macro variables.
-- `sectorBeta[sectorId]` for each sector.
-- `orderFlowGain` (`kFlow`).
-- `orderFlowExponent` (`alpha`, must be `< 1`).
+- `moodBeta`.
 - `noiseSigma` (`kNoise`).
-- Confirmation of the proposed functional shapes themselves:
-  log-space drift, linear macro/sector betas, power-law order-flow
-  impact, scalar Gaussian noise.
+- Confirmation of the proposed functional shapes: log-space drift,
+  linear mood beta, scalar Gaussian noise.
 
-### Fundamentals (will land in a new `tuning.fundamentals.*` block)
+### Fundamentals seed list (will land in a new `tuning.fundamentals.*` block)
 
-- The exact `fairValue` formula (probably
-  `sector.pe * ttmEarnings * qualityMultiplier(qualityScore)`).
-- The `qualityMultiplier` curve.
-- Per-tick update rules for `ttmEarnings` and `qualityScore`.
-- The list of sectors itself, plus per-sector `betaSector` and `pe`
-  baseline.
-- The `baseAdv` formula (probably
-  `sharesOutstanding * float * turnover`), and where `turnover`
-  lives.
-
-### Player feedback
-
-- **Possible sign error in 10.6.** With
-  `effectiveAdv = baseAdv * (1 + flowAdd)`, larger AUM share
-  *reduces* impact. Opposite of stated intent. Should the divisor
-  be `(1 - flowAdd)`, should `flowAdd` apply to the numerator
-  instead, or should the intent be reworded?
-- **Combination with `orderFlowImpact`.** Today the kernel adds
-  them: `... + orderFlowImpact + playerFeedback + ...`. The word
-  "amplifier" suggests a multiplier on `orderFlowImpact` instead.
-  Pick one.
+- The list of sectors (id, `sectorScalar`).
+- The list of companies (id, `sectorId`, `baseFairValue`,
+  `sharesOutstanding`).
 
 ### Breakthroughs
 
 - The competitor/supplier graph: probably a per-company
-  `relations: { competitors: [...], suppliers: [...] }` block in a
-  new `tuning.companies.*` section.
+  `relations: { competitors: [...], suppliers: [...] }` block
+  inside `tuning.fundamentals.companies[*]`.
 
-### Companies
+### Closed by 2026-05-17 simplifications
 
-- The seed list of companies for a brand-new session: count, names,
-  sector assignments, initial `sharesOutstanding`, `float`, and
-  starting prices.
+- ~~`fairValue` formula -- now `baseFairValue * sectorScalar`.~~
+- ~~`baseAdv` source -- now `sharesOutstanding * baseAdvFraction`.~~
+- ~~Five `macroBeta[v]` coefficients -- collapsed to one `moodBeta`.~~
+- ~~Per-sector `sectorBeta[sectorId]` -- sector-rotation removed.~~
+- ~~`orderFlowGain` and `orderFlowExponent` -- folded into the
+  single `impact` term.~~
+- ~~Player-feedback sign error -- dissolved with the single-term
+  `impact` formula.~~
 
 ---
 
-## 13. Game-vs-realism notes (where the design could be simpler)
+## 13. Simplifications applied 2026-05-17
 
-The user's standing instruction is: **this is a game, not a real
-market simulator.** The model only has to feel fair, reactive, and
-fun for 30 simulated years. Below are places where the current
-design may be more elaborate than the game needs. Each is a
-**question for the project owner**, not a unilateral change.
+This is the **retrospective** version of what used to be a list of
+"could be simpler" questions. The project owner reviewed all 8
+proposals and authorised implementing all of them. The rationale
+and trade-off for each is captured below so future agents (and
+future you) understand why the design looks the way it does.
 
-### Could be simpler -- ideas worth discussing
+The standing principle the owner restated alongside this decision:
+**WSR2 is a game, not a real-market simulator. The model only has
+to feel fair, reactive, and fun across a 30-year career.**
 
-1. **Five macro variables may be too many.** The pricing kernel
-   only reads them via `betaMacro[var]`. A single "macro mood"
-   number (e.g. just `consumerSentiment`) might give the same
-   feel with one-fifth the tuning work. Trade-off: less narrative
-   colour ("inflation is up but growth is up too" disappears).
+### 13.1 Macro: five variables -> one (`marketMood`)
 
-2. **The 4-phase cycle could collapse to 2 phases** (Up / Down)
-   with a simple coin-flip transition. Trade-off: loses the
-   distinct "Peak" feeling at the top of a boom and the
-   "Trough" feeling at the bottom.
+**Before.** `gdpGrowth`, `inflation`, `policyRate`, `creditSpread`,
+`consumerSentiment` -- each with its own OU process, mean,
+reversion, vol, min, max, and per-phase bias matrix.
 
-3. **OU drift on five variables is mathematically heavy** for a
-   game. A simpler "each macro variable wanders within a band and
-   gets a random kick each year" would feel similar. Trade-off:
-   harder to write parity tests against an existing reference.
+**After.** Just `marketMood`. The pricing kernel only ever
+consumed these variables via `betaMacro[v] * delta(macro[v])`, so
+collapsing five into one cost ~one-fifth the tuning surface for
+identical behaviour at the kernel level.
 
-4. **Sector P/E and `qualityMultiplier` for `fairValue` may be
-   overkill.** A flat `fairValue = baseFairValue * sectorScalar *
-   companyScalar` could work, with all three scalars hand-set per
-   company and only the per-tick price wandering around it.
+**Trade-off accepted.** The event log can no longer say "inflation
+is rising while growth holds steady" -- that narrative colour is
+gone. The owner judged this colour was not worth the complexity.
 
-5. **`orderFlowImpact` and `playerFeedback` as two separate
-   components** add complexity. A single
-   `impact = kImpact * netSignedQty / baseAdv * (1 + whaleBonus)`
-   may capture everything the game needs.
+### 13.2 Cycle: four phases -> two (`Up` / `Down`)
 
-6. **Truncated Pareto for breakthrough severity** is unusual for a
-   game. A flat uniform `[0, 1]` (or a few bucketed tiers: small /
-   medium / huge with fixed probabilities) is easier to reason
-   about and tune.
+**Before.** `Expansion -> Peak -> Contraction -> Trough -> Expansion`
+with separate min/max lengths per phase and a 4-by-5 `phaseBias`
+matrix.
 
-7. **Three stability caps stacked** (per-instrument, per-sector,
-   per-market) could become one: "no stock moves more than X% per
-   tick" enforced *before* summing. Trade-off: loses the realistic
-   "the whole market is having a quiet day" coupling.
+**After.** Just `Up <-> Down`. Two min/max length entries and a
+single per-phase bias on `marketMood`.
 
-8. **`creditSpread` is hidden from Standard players today**. If
-   players never see it, why simulate it? Either expose it or drop
-   it.
+**Trade-off accepted.** No distinct "top of the boom" or
+"bottom of the bust" feeling. Boom/bust still happen because the
+OU + bias still produces them; we just label them with two names
+instead of four.
 
-If you (the project owner) say "keep all of these, they earn their
-keep", that is fine -- this file just documents the alternatives so
-the choice is explicit. If you say "yes, simplify N of these", we
-can collapse the design before the C# kernel code is written and
-save a lot of tuning effort.
+### 13.3 OU drift: kept (already minimal at 1 variable)
 
-### Game-design principles that are non-negotiable
+**Before.** Five OU processes per tick, five normals consumed.
 
-These have already been decided (AGENTS.md section 12) and should
-**not** be revisited as a simplification:
+**After.** One OU process per tick, one normal consumed.
 
-- Determinism and bit-exact snapshots stay.
-- Tunability via `tuning.json` stays.
-- Server-authoritative order ids/seqs stay.
-- The deny-by-default visibility map stays.
-- Multiplayer locked to 1x stays.
-- 30-year career length with 50-year stability headroom stays.
+**Note.** section 13 originally proposed replacing OU with "a yearly
+random kick within a band". Once we collapsed to one variable,
+that proposal lost most of its appeal: one OU step is three lines
+of arithmetic and one Gaussian draw, which is already minimal.
+Keeping OU means we keep the existing parity-test infrastructure
+(`RngParityTests` already covers Box-Muller for the seeds 42, 1,
+123) and the macro layer reads naturally to a novice C# developer.
+
+### 13.4 `fairValue`: drop earnings/quality/PE -> `baseFairValue * sectorScalar`
+
+**Before.** `fairValue = sector.pe * ttmEarnings *
+qualityMultiplier(qualityScore)` with `ttmEarnings`, `qualityScore`,
+sector P/E response curves, all TBD.
+
+**After.** `fairValue = company.baseFairValue * sector.scalar`.
+Two designer-set numbers.
+
+**Trade-off accepted.** No "earnings season" mechanic. No story
+about a company growing its business over a 30-year career. If
+designers want a company to be more valuable they edit
+`baseFairValue` in `tuning.json`. The game's drama comes from
+breakthroughs and the kernel's other forces; the fair-value anchor
+just needs to exist, not evolve.
+
+### 13.5 Impact: two channels -> one (combined `impact`)
+
+**Before.** Two kernel components: `orderFlowImpact` (power-law in
+order size) and `playerFeedback` (a different formula with an
+inflated-ADV trick that had a flagged sign bug).
+
+**After.** One kernel component `impact`:
+`impactGain * (netSignedQty / baseAdv) * (1 + whaleBonus)` capped
+at 150 bp.
+
+**Trade-off accepted.** No sub-linear power law on order size
+(would have damped truly enormous orders proportionally less than
+small ones); the linear-times-whale-bonus combination is good
+enough for game purposes and the 150 bp cap handles the worst case
+anyway. **Side benefit:** the flagged sign bug in the old section 10.6
+formula dissolved with the rewrite.
+
+### 13.6 Severity: truncated Pareto -> three buckets
+
+**Before.** `severityDistribution: { truncatedPareto, alpha: 1.5,
+min: 0.1, max: 1.0 }`. Realistic fat-tail; opaque to designers.
+
+**After.** Three named tiers:
+- `small`: probability 0.70, severity 0.10..0.25
+- `medium`: probability 0.25, severity 0.25..0.50
+- `huge`: probability 0.05, severity 0.50..0.80
+
+**Trade-off accepted.** No mathematical fat tail. (In exchange,
+designers can edit one number to make huge events more or less
+common, and event-log entries can say "huge
+BreakthroughInvention" in plain English.)
+
+### 13.7 Stability caps: three stacked -> one
+
+**Before.** Per-instrument cap (25 %) + per-sector budget (15 %) +
+per-market budget (8 %). Stacked, in order.
+
+**After.** Per-instrument cap only. 25 % normal day, 60 % event
+day.
+
+**Trade-off accepted.** No cross-stock coupling: a "the whole
+market is up 8 % already this tick, scale everyone down" feature
+is gone. (In exchange, the kernel becomes stateless across stocks
+within a tick -- you can compute every stock's new price in any
+order, or in parallel, with bit-exact results. The earlier design
+required summing absolutes across stocks before scaling.)
+
+### 13.8 `creditSpread`: dropped entirely
+
+**Before.** Standard-role players couldn't see `creditSpread`, but
+the engine still simulated it.
+
+**After.** Subsumed by the collapse of five macro variables to one
+in section 13.1. Doesn't exist at all.
+
+**Trade-off accepted.** None worth mentioning -- the field was
+hidden anyway, and the kernel never read it for its own
+narrative value.
+
+### What the owner's decision did NOT change
+
+These are still firmly in place:
+
+- Determinism and bit-exact snapshots.
+- Tunability via `tuning.json`.
+- Server-authoritative order ids/seqs.
+- Deny-by-default visibility map.
+- Multiplayer locked to 1x.
+- 30-year career length with 50-year stability headroom.
+- The 7-step (was 9) fixed tick pipeline ordering.
 
 ---
 

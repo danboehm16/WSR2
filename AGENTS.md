@@ -348,7 +348,7 @@ Two kinds of unresolved item appear below:
 
 ### 10.2. Tick pipeline (fixed ordering)
 
-`Session.Tick()` MUST execute exactly these nine steps in this order,
+`Session.Tick()` MUST execute exactly these seven steps in this order,
 every tick. Reordering, parallelising, or skipping a step is a
 breaking change: it requires bumping `SchemaVersion` and writing a
 snapshot migration.
@@ -595,9 +595,10 @@ flags for anything not yet decided by the project owner.
    data produced by 10.7.
 
 4. **`impact`** -- combined effect of orders queued for this stock
-   this tick. Sub-linear in order size and amplified when the
-   trading players are already big holders of the company. Full
-   formula in 10.6. Bounded to `+/- tuning.impact.impactCapBps`
+   this tick. Linear in order size, amplified when the trading
+   players are already big holders of the company, and hard-capped
+   per tick. Full formula in 10.6. Bounded to
+   `+/- tuning.impact.impactCapBps`
    (150 bp = 1.5 %) per tick.
 
 5. **`noise`** -- mean-zero Gaussian residual that gives the price

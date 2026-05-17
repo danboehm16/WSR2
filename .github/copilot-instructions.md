@@ -8,8 +8,8 @@ The authoritative instructions for any agent working in this repo are in
 The repository has been deliberately reset. There is **no application
 code** -- the previous TypeScript prototype and the partial C# port were
 removed so the next coding session can start from a clean slate in
-idiomatic C#. Only `tuning.json`, `AGENTS.md`, `README.md`, this file,
-and `.gitignore` remain.
+idiomatic C#. Only `tuning.json`, `AGENTS.md`, `README.md`,
+`PRICING_MODEL.md`, this file, and `.gitignore` remain.
 
 ## Highlights you must not forget
 
