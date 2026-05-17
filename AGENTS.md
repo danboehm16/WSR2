@@ -7,10 +7,23 @@ short-term instruction, **stop and ask** rather than dropping the constraint.
 
 > **Repo state:** the codebase has been deliberately reset. Only this file,
 > [`README.md`](./README.md), [`tuning.json`](./tuning.json),
+> [`GAME_SPECS.md`](./GAME_SPECS.md), [`MODELS_PLAN.md`](./MODELS_PLAN.md),
+> [`PRICING_MODEL.md`](./PRICING_MODEL.md),
 > [`.github/copilot-instructions.md`](./.github/copilot-instructions.md),
 > and `.gitignore` are kept. There is **no** application code yet -- neither
 > the previous TypeScript prototype nor the partial C# port survive. The
 > next coding session starts from a clean slate, idiomatic C# from line one.
+
+> **Game rules contract.** [`GAME_SPECS.md`](./GAME_SPECS.md) at the repo
+> root is the **authoritative description of how WSR2 is played** --
+> entities (Player, Company, Session), starter conditions, the 20 %
+> control rule (direct and transitive, Wall Street Raider-style),
+> the order-validation pipeline, company cash and holdings, and the
+> server-authoritative invariants. This file (AGENTS.md) remains the
+> contract for *how the engine is built* (determinism, tunability,
+> simulation model). When a rule of play changes, edit `GAME_SPECS.md`
+> first; if a constraint in this file ever conflicts with `GAME_SPECS.md`
+> on a rules-of-play question, stop and ask the project owner.
 
 ---
 

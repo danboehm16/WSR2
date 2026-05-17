@@ -42,6 +42,18 @@ formulas -- those live in `AGENTS.md` §10 and `PRICING_MODEL.md`.
 
 ## 1. How this plan fits the pricing model
 
+> **Game-rules conformance.** This plan was originally written assuming
+> a "player owns a personal portfolio" model. The authoritative
+> game rules in [`GAME_SPECS.md`](./GAME_SPECS.md) make companies the
+> unit of agency: every transaction is executed by a player-controlled
+> company, and per-company *holdings* (the share ledger) and *cash*
+> live on `Company`, not on `Player`. This section, the Company
+> field set (§3), the Session table (§6), the cross-cutting types
+> (§7), and the non-additions list (§11) have all been updated to
+> match. `Session.players[].positions` no longer exists; impact-term
+> AUM is computed from per-company holdings (see the kernel
+> cross-walk row below).
+
 The pricing kernel (`AGENTS.md` §10.5) sums **five named return
 components** -- `fundamentalDrift`, `moodShock`, `breakthroughImpulse`,
 `impact`, `noise` -- into one fractional return per company per tick,
@@ -59,7 +71,7 @@ The models below are the **minimum** shape that makes that work:
 | `fairValue` (anchor for `fundamentalDrift`) | derived `Company.fairValue` = `baseFairValue * sectorScalar` |
 | `marketMood`, `prevMarketMood` (drives `moodShock`) | `MacroState.marketMood` + the previous tick's value held by the session |
 | `breakthroughImpulse` | `Company.breakthroughImpulse` (decays in place) |
-| `netSignedQty`, `baseAdv`, `aumShare` (drive `impact`) | `Session.pendingOrders[companyId]`, `Company.sharesOutstanding`, `Session.players[].positions` |
+| `netSignedQty`, `baseAdv`, `aumShare` (drive `impact`) | `Session.pendingOrders[companyId]`, `Company.sharesOutstanding`, per-company `Company.holdings` walked across all companies to compute each player's effective AUM in the target (see `GAME_SPECS.md` §3 for the control closure) |
 | `z` (drives `noise`) | one Box-Muller normal from the session RNG, every company every tick |
 | stability cap selector | `Company.hasActiveBreakthrough` (derived from `breakthroughImpulse`) |
 
@@ -151,6 +163,8 @@ already-snapshotted state, the snapshot does not need to store them.
 | `volume` | `long` | shares | order-matching step 4 | Standard | yes | Cumulative shares traded over the session. Stays `0` until Phase 2 (matching) lands. |
 | `volumeThisTick` | `long` | shares | order-matching step 4 | Standard | no (ephemeral) | Useful for UI / event log; reset to `0` at the start of every tick. **Ephemeral**, not derived: on snapshot restore it is simply re-initialised to `0` (it will be repopulated on the next tick's matching step). It is not a cached function of other snapshotted state. |
 | `breakthroughImpulse` | `double` | fractional return | breakthrough step 5 (constructed); decays each tick | **Admin only** | yes (omit when 0) | Already in fractional-return units. Decay multiplier per tick: `0.5^(1 / decay.defaultHalfLifeTicks)`. |
+| `cash` | `double` | $ | settlement (§4 of `GAME_SPECS.md`) | **Admin** + **owner** (the players that control this company) | yes | Company bank balance. Hard invariant: `cash >= 0` (`GAME_SPECS.md` §9). Settles on every executed buy/sell of another company's shares. |
+| `holdings` | `ImmutableDictionary<string, long>` | shares | settlement | **Admin** + **owner** | yes (only non-zero entries) | Per-target share ledger. Key is the *other* company's `id`; value is shares this company owns of it. Self-keys are forbidden (`GAME_SPECS.md` §9 invariant 3). Together with each player's personal share ledger and the free-float pool, this is the source of truth for the control closure (`GAME_SPECS.md` §3). |
 
 `prevPrice` is **not** a stored field on `Company`. The kernel reads
 the current `price` at the start of step 3 (before writing the new
@@ -223,7 +237,8 @@ required.
 | `Session.seed`, `Session.rngCursor` | One RNG per session. Company never owns its own RNG. |
 | `Session.tickIndex` | Stamped into event-log entries the company emits (e.g. `breakthroughFired`, `priceFloored`). |
 | `MacroState.marketMood` + previous tick's value | Read by the kernel for `moodShock`. The session keeps the previous tick's value (one `double`) so the kernel can compute the delta without companies storing it. |
-| `Session.players[].positions` | The only place per-company holdings live. The impact term reads `sum over players of (player.sharesIn(company.id) * prevPrice)` -- Company itself stores no holder list. |
+| `Session.players[]` | One `Player` per participant. Each `Player` carries `playerId`, `displayName`, `isKnockedOut`, and a **personal share ledger** (`ImmutableDictionary<string, long>`) -- initially seeded with 100 % of one starter company per `GAME_SPECS.md` §2. Players have **no personal cash**; buying power lives inside controlled companies' `cash`. |
+| Per-company `Company.holdings` (across all companies) | Source of truth for non-personal share ownership. The impact term computes each player's effective AUM in the target company by walking the **control closure** (`GAME_SPECS.md` §3) and summing personal shares + holdings held by every controlled company. |
 | `Session.pendingOrders[]` | Indexed by `companyId` at the start of the kernel step. The order book lives on the session. |
 | `Session.eventLog[]` | Where Company-related events (`priceFloored`, `breakthroughFired`, ripple targets, admin injections) get appended. Company never owns its own log. |
 
@@ -240,12 +255,21 @@ slice knows they need to be defined alongside Company:
 
 - **`OrderSide`** enum: `Buy`, `Sell`. Implied by §10.6's sign
   convention.
-- **`Order`** record: `{ long Id, long Seq, string PlayerId, string CompanyId, OrderSide Side, long Quantity }`. `Id`
-  and `Seq` are server-assigned (§4).
-- **`PlayerPosition`** record: `{ string CompanyId, long Shares, double AverageCostBasis }`.
-  Company itself does not need to know about positions; the impact
-  term walks `Session.players[]` once per tick and computes
-  `playerAumInCompany` on the fly. No per-company holder cache needed.
+- **`Order`** record: `{ long Id, long Seq, string SubmittedByPlayerId, string ActingCompanyId, string TargetCompanyId, OrderSide Side, long Quantity }`.
+  `Id` and `Seq` are server-assigned (§4). `ActingCompanyId` is the
+  player-controlled company executing the trade; `TargetCompanyId`
+  is the company whose shares are being traded. `Acting !=
+  Target` is required (`GAME_SPECS.md` §4.1).
+- **`Player`** record: `{ string Id, string DisplayName, bool IsKnockedOut, ImmutableDictionary<string, long> PersonalShares }`.
+  Carries the player's *personal* share ledger only (initially
+  100 % of one starter company per `GAME_SPECS.md` §2); company
+  holdings live on `Company.holdings`, not here. Players hold **no
+  personal cash**; spending power lives inside controlled
+  companies.
+- **`FreeFloat`** (TBD shape, `GAME_SPECS.md` §11 bullet 1): the
+  synthetic counterparty that holds 100 % of every non-starter
+  company on tick 0 and trades against player-controlled orders.
+  Listed here so it is not forgotten when matching lands.
 - **`BreakthroughImpulseDelta`** record (transient): emitted by §10.7
   step 4 onto target + competitor + supplier companies during the
   breakthrough step. Lives only inside the breakthrough subsystem.
@@ -407,8 +431,11 @@ simplifications (`AGENTS.md` §12, §13; `PRICING_MODEL.md` §13).
   (`AGENTS.md` §8 *Async*).
 - **No per-company event log** -- events are appended to the shared
   `Session.eventLog`.
-- **No holder list on Company** -- positions live on
-  `Session.players[].positions` and are walked once per tick.
+- **No per-company holder list** -- shareholders are reconstructed
+  on demand by walking `Session.players[].PersonalShares` plus
+  every `Company.holdings` ledger (the control closure in
+  `GAME_SPECS.md` §3). Caching a reverse index is a future
+  optimisation; the current spec is to recompute.
 
 ---
 

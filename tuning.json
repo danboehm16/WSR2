@@ -50,6 +50,22 @@
     "dailyMoveCapPct": 25,
     "eventDayDailyMoveCapPct": 60
   },
+  "game": {
+    "controlThresholdPct": 20,
+    "starterCash": 10000000,
+    "starterReRollLimit": 1,
+    "starterCompanies": [],
+    "priceSlackPct": 0.02,
+    "orderRejectionReasons": [
+      "notInControl",
+      "insufficientCash",
+      "insufficientShares",
+      "selfTrade",
+      "unknownCompany",
+      "nonPositiveQuantity"
+    ],
+    "freeFloatInitialPct": 100
+  },
   "breakthroughs": {
     "perCompanyAnnualProbability": 0.02,
     "severityTiers": [
@@ -80,7 +96,9 @@
         "sector.scalar": true,
         "company.price": true, "company.volume": true, "company.sharesOutstanding": true,
         "company.baseFairValue": true, "company.fairValue": true,
+        "company.cash": true, "company.holdings": true,
         "player.ownPositions": true, "player.otherPositions": true,
+        "player.personalShares": true, "player.isKnockedOut": true, "player.effectiveControl": true,
         "leaderboard.basic": true, "leaderboard.detailed": true,
         "events.publicFeed": true, "events.internalRecord": true,
         "session.tickInternals": true, "session.rngCursor": true
@@ -90,7 +108,9 @@
         "sector.scalar": true,
         "company.price": true, "company.volume": true, "company.sharesOutstanding": true,
         "company.baseFairValue": false, "company.fairValue": false,
+        "company.cash": false, "company.holdings": false,
         "player.ownPositions": true, "player.otherPositions": false,
+        "player.personalShares": false, "player.isKnockedOut": true, "player.effectiveControl": false,
         "leaderboard.basic": true, "leaderboard.detailed": false,
         "events.publicFeed": true, "events.internalRecord": false,
         "session.tickInternals": false, "session.rngCursor": false
