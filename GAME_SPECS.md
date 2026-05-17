@@ -465,6 +465,18 @@ forward-compatible move is to add a third role-equivalent
 (§12) and must be resolved with the project owner before
 implementation.
 
+**Interim behaviour until that role lands.** `tuning.json` currently
+sets `company.cash`, `company.holdings`, `player.personalShares`,
+and `player.effectiveControl` to `false` for the `Standard` role.
+That means non-Admin clients see **none** of these fields, even for
+companies they themselves control. This is the safe deny-by-default
+choice (`AGENTS.md` §5) but it is **not** the intended end state --
+players obviously need to see the cash and holdings of companies
+they control. The interim treatment is documented here so reviewers
+do not mistake it for the final visibility surface; the per-
+relationship role is what flips Standard from "hidden" to "visible
+when the viewer controls the entity".
+
 ---
 
 ## 11. What this spec deliberately does NOT include (yet)

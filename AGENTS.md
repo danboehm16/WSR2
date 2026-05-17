@@ -716,9 +716,20 @@ simulation.
 **Inputs (per company, per tick):**
 
 - `netSignedQty = sum over queued orders of (side == buy ? +qty : -qty)`.
-- `aumShare = playerAumInCompany / companyMarketCap`, where
-  `playerAumInCompany = sum over players of (player.sharesInCompany * prevPrice)`
-  and
+- `aumShare = submittingPlayersAumInTarget / companyMarketCap`,
+  computed against the **target** company of the orders (the
+  company whose shares are being traded), where
+  `submittingPlayersAumInTarget` is summed over the *distinct
+  players who submitted at least one order against this target
+  this tick*. For each such player `P`, that player's holding in
+  the target `T` is
+  `P.personalShares(T) + sum over companies C that P controls of C.holdings(T)`
+  (the control closure -- see [`GAME_SPECS.md`](./GAME_SPECS.md)
+  §3 for the algorithm and the 20 % threshold). The value
+  contribution is `holding * prevPrice`. Summing only over
+  *submitting* players is what makes `whaleBonus` reward whales who
+  are actually trading this tick; a passive megaholder who
+  submits nothing contributes nothing.
   `companyMarketCap = sharesOutstanding * prevPrice`.
 - `baseAdv = sharesOutstanding * tuning.impact.baseAdvFraction`.
   One tunable fraction, no float/turnover decomposition.
