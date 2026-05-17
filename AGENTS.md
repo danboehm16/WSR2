@@ -224,7 +224,7 @@ developer reading it for the first time.
 ### Minimal code
 - Write the **smallest amount of code** that correctly solves the
   problem in front of you. No speculative APIs, no "we'll need it
-  later" scaffolding, no parameters nothing currently passes.
+  later" scaffolding, no parameters that nothing currently passes.
 - Don't add a new class, interface, or layer unless something concrete
   needs it today. Inline it until a second caller appears.
 - When you touch a file, **remove unnecessary code on sight**: dead
