@@ -303,8 +303,16 @@ top-to-bottom on first encounter:
 - **10.8 - 10.9** wrap up role visibility and the snapshot contract.
 
 Magnitudes live in `tuning.json`. This section defines the algorithms,
-units, and invariants that those numbers feed into. Two kinds of
-unresolved item appear below:
+units, and invariants that those numbers feed into.
+
+> **Beginner-friendly walkthrough.** A plain-English companion to this
+> section -- with a full glossary, a complete variable/constant
+> reference table, a narrated one-tick example, and game-vs-realism
+> notes -- lives in [`PRICING_MODEL.md`](./PRICING_MODEL.md) at the
+> repo root. This section (10) remains the authoritative contract; if
+> the two ever disagree, this section wins.
+
+Two kinds of unresolved item appear below:
 
 - `[TBD]` -- a value or design choice that has *not* been made.
   **Do not invent it.** Stop and ask the project owner.

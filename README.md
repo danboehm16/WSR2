@@ -57,7 +57,7 @@ dotnet format --verify-no-changes   # style gate
 | Visibility | Per-role, per-field map in `tuning.json`; unknown fields/roles are HIDDEN. |
 | Multiplayer speed | Solo can pick from `allowedSpeedsSolo`; >=2 players locks to 1x (admin override allowed and logged). |
 | Snapshots | Versioned schema with explicit migrations; unknown versions throw. |
-| Simulation model | Tick pipeline, macro OU drift, pricing kernel, player feedback, breakthroughs and stability caps documented in detail in AGENTS.md section 10. Items marked TBD there must be confirmed with the project owner before implementation. |
+| Simulation model | Tick pipeline, macro OU drift, pricing kernel, player feedback, breakthroughs and stability caps documented in detail in AGENTS.md section 10 (the contract) and in [`PRICING_MODEL.md`](./PRICING_MODEL.md) (a plain-English walkthrough with glossary and full variable/constant reference). Items marked TBD must be confirmed with the project owner before implementation. |
 | Code quality | Minimal code, simple syntax readable by a novice, comments explain *why*, review adjacent/dependent code on every change, every PR adds tests and runs `dotnet build` + `dotnet test` + `dotnet format --verify-no-changes` green before declaring done. |
 
 ## Phased build and baked-in decisions
